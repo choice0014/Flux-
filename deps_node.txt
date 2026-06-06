@@ -1,0 +1,2 @@
+﻿# Node dependencies
+(프로젝트에 package.json이 없습니다)
