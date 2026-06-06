@@ -113,13 +113,18 @@ public:
         : arrayIndex(std::move(ai)), value(std::move(v)) {}
 };
 
+struct VariableDeclaration {
+    std::string name;
+    std::unique_ptr<Expression> initializer;
+};
+
 class VarDeclaration : public Statement {
 public:
     std::string type;
-    std::vector<std::string> names;
+    std::vector<std::unique_ptr<VariableDeclaration>> decls;
     bool isArray;
-    VarDeclaration(std::string t, std::vector<std::string> n, bool isArr = false) 
-        : type(t), names(n), isArray(isArr) {}
+    VarDeclaration(std::string t, std::vector<std::unique_ptr<VariableDeclaration>> d, bool isArr = false) 
+        : type(t), decls(std::move(d)), isArray(isArr) {}
 };
 
 class BlockStmt : public Statement {

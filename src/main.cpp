@@ -10,7 +10,8 @@
 
 #include "Lexer.h"
 #include "Parser.h"
-#include "Interpreter.h"
+#include "Compiler.h"
+#include "VM.h"
 
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
@@ -42,8 +43,12 @@ int main(int argc, char* argv[]) {
         Flux::Parser parser(tokens);
         auto program = parser.parse();
 
-        Flux::Interpreter interpreter;
-        interpreter.interpret(*program);
+        Flux::Runtime::Chunk chunk;
+        Flux::Compiler compiler;
+        compiler.compile(*program, &chunk);
+
+        Flux::VM vm;
+        vm.interpret(&chunk);
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;

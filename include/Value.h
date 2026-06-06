@@ -12,8 +12,17 @@ namespace Runtime {
 
 struct Array;
 struct Object;
+struct ObjFunction;
+class Chunk;
 
-using Value = std::variant<int, float, std::string, bool, std::shared_ptr<Array>, std::shared_ptr<Object>>;
+using Value = std::variant<int, float, std::string, bool, std::shared_ptr<Array>, std::shared_ptr<Object>, std::shared_ptr<ObjFunction>, void*>;
+
+struct ObjFunction {
+    std::string name;
+    int arity;
+    std::shared_ptr<Chunk> chunk;
+    ObjFunction() : arity(0), chunk(std::make_shared<Chunk>()) {}
+};
 
 struct Array {
     std::string elementType;

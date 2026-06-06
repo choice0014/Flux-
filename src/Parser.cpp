@@ -202,24 +202,29 @@ std::unique_ptr<AST::Statement> Parser::parseFunctionDef() {
 
 std::unique_ptr<AST::Statement> Parser::parseVarDeclaration() {
     std::string type = previous().value;
-    std::vector<std::string> names;
+    std::vector<std::unique_ptr<AST::VariableDeclaration>> decls;
     bool isArray = false;
     
-    names.push_back(consume(TokenType::T_IDENTIFIER, "Expect variable name.").value);
-    if (match(TokenType::T_LBRACKET)) {
-        consume(TokenType::T_RBRACKET, "Expect ']' after '['.");
-        isArray = true;
-    }
-    
-    while (match(TokenType::T_COMMA)) {
-        names.push_back(consume(TokenType::T_IDENTIFIER, "Expect variable name.").value);
+    do {
+        std::string name = consume(TokenType::T_IDENTIFIER, "Expect variable name.").value;
+        std::unique_ptr<AST::Expression> initializer = nullptr;
+        
         if (match(TokenType::T_LBRACKET)) {
             consume(TokenType::T_RBRACKET, "Expect ']' after '['.");
             isArray = true;
+        } else if (match(TokenType::T_EQUALS)) {
+            initializer = parseExpression();
         }
-    }
+        
+        auto decl = std::make_unique<AST::VariableDeclaration>();
+        decl->name = name;
+        decl->initializer = std::move(initializer);
+        decls.push_back(std::move(decl));
+    } while (match(TokenType::T_COMMA));
+
     consume(TokenType::T_SEMICOLON, "Expect ';' after variable declaration.");
-    return std::make_unique<AST::VarDeclaration>(type, names, isArray);
+    
+    return std::make_unique<AST::VarDeclaration>(type, std::move(decls), isArray);
 }
 
 std::unique_ptr<AST::Statement> Parser::parseImportStmt() {
