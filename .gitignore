@@ -1,3 +1,5 @@
 .vs/
 .antigravitycli/
 .vscode/
+.idea/
+*.obj
