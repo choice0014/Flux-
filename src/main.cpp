@@ -10,8 +10,13 @@
 #include "Version.h"
 #include "Lexer.h"
 #include "Parser.h"
+
+#ifdef USE_VM
 #include "Compiler.h"
 #include "VM.h"
+#else
+#include "Interpreter.h"
+#endif
 
 void printHelp() {
     std::cout <<
@@ -65,12 +70,17 @@ int main(int argc, char* argv[]) {
         Flux::Parser parser(tokens);
         auto program = parser.parse();
 
+#ifdef USE_VM
         Flux::Runtime::Chunk chunk;
         Flux::Compiler compiler;
         compiler.compile(*program, &chunk);
 
         Flux::VM vm;
         vm.interpret(&chunk);
+#else
+        Flux::Interpreter interpreter;
+        interpreter.interpret(*program);
+#endif
     }
     catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;

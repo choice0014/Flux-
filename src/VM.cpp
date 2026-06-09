@@ -1,6 +1,7 @@
 #include "VM.h"
 #include "OpCode.h"
 #include "AST.h"
+#include "GUI.h"
 #include <iostream>
 #include <stdexcept>
 #include <cmath>
@@ -10,46 +11,9 @@
 #include <ctime>
 #include <filesystem>
 
-#ifdef _WIN32
-#define NOMINMAX
-#include <windows.h>
-#pragma comment(lib, "user32.lib")
-
-namespace Flux { class VM; }
-static Flux::VM* g_activeVM = nullptr;
-static std::map<int, std::string> g_buttonCallbacks;
-static int g_nextControlId = 1000;
-static HWND g_hWnd = NULL;
-
-static std::wstring utf8ToWide(const std::string& str) {
-    if (str.empty()) return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-    std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
-    return wstrTo;
-}
-
-static LRESULT CALLBACK FluxWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-        case WM_COMMAND: {
-            int id = LOWORD(wp);
-            if (HIWORD(wp) == BN_CLICKED && g_buttonCallbacks.count(id) && g_activeVM) {
-                g_activeVM->callFluxFunction(g_buttonCallbacks[id]);
-            }
-            break;
-        }
-        case WM_DESTROY: PostQuitMessage(0); return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-#endif
-
 namespace Flux {
 
 VM::VM() : frameCount(0), stackTop(stack) {
-#ifdef _WIN32
-    g_activeVM = this;
-#endif
 }
 
 InterpretResult VM::interpret(Runtime::Chunk* chunk) {
@@ -202,7 +166,42 @@ InterpretResult VM::run() {
                             }
                         }
                         // Handle built-in modules
-                        if (objName == "gui") { /* ... */ }
+                        if (objName == "gui") {
+                            if (subName == "msgbox") {
+                                GUI::messageBox(Runtime::valueToString(peek(1)), Runtime::valueToString(peek(0)));
+                                for(int i=0; i<3; ++i) pop(); push(0); break;
+                            }
+                            if (subName == "window") {
+                                std::string title = Runtime::valueToString(peek(2));
+                                int w = std::get<int>(peek(1)), h = std::get<int>(peek(0));
+                                GUI::initWindow(w, h, title);
+                                for(int i=0; i<4; ++i) pop(); push(0); break;
+                            }
+                            if (subName == "button") {
+                                GUI::addControl(GUI::Control::BUTTON,
+                                    Runtime::valueToString(peek(5)),
+                                    (float)std::get<int>(peek(4)),
+                                    (float)std::get<int>(peek(3)),
+                                    (float)std::get<int>(peek(2)),
+                                    (float)std::get<int>(peek(1)),
+                                    Runtime::valueToString(peek(0)));
+                                for(int i=0; i<7; ++i) pop(); push(0); break;
+                            }
+                            if (subName == "label") {
+                                GUI::addControl(GUI::Control::LABEL,
+                                    Runtime::valueToString(peek(4)),
+                                    (float)std::get<int>(peek(3)),
+                                    (float)std::get<int>(peek(2)),
+                                    (float)std::get<int>(peek(1)),
+                                    (float)std::get<int>(peek(0)));
+                                for(int i=0; i<6; ++i) pop(); push(0); break;
+                            }
+                            if (subName == "loop") {
+                                GUI::runLoop([this](const std::string& cb) { this->callFluxFunction(cb); });
+                                GUI::closeWindow();
+                                pop(); push(0); break;
+                            }
+                        }
                         pop(); push(0);
                     }
                 } else throw std::runtime_error("Can only call functions.");

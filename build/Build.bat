@@ -23,7 +23,11 @@ echo [INFO] Loading developer environment...
 endlocal & call "%TARGET_BAT%"
 
 :: 3. Build project with C++20 and UTF-8 flags
-cl /std:c++20 /utf-8 /EHsc /I"../include" ../src/main.cpp ../src/Lexer.cpp ../src/Parser.cpp ../src/Compiler.cpp ../src/VM.cpp /Feflux_interpreter.exe
+echo [Building Flux VM...]
+cl /std:c++20 /utf-8 /EHsc /I"../include" /DUSE_VM ../src/main.cpp ../src/Lexer.cpp ../src/Parser.cpp ../src/GUI.cpp ../src/Platform.cpp ../src/Compiler.cpp ../src/VM.cpp raylib.lib user32.lib gdi32.lib winmm.lib shell32.lib /Feflux_vm.exe
+
+echo [Building Flux Interpreter...]
+cl /std:c++20 /utf-8 /EHsc /I"../include" ../src/main.cpp ../src/Lexer.cpp ../src/Parser.cpp ../src/GUI.cpp ../src/Platform.cpp ../src/Interpreter.cpp raylib.lib user32.lib gdi32.lib winmm.lib shell32.lib /Feflux_interpreter.exe
 
 pause
 exit /b

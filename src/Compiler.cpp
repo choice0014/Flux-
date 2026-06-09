@@ -4,6 +4,10 @@
 
 namespace Flux {
 
+namespace Runtime {
+    ObjFunction::ObjFunction() : arity(0), chunk(std::make_shared<Chunk>()) {}
+}
+
 Compiler::Compiler() : currentChunk(nullptr), scopeDepth(0), currentFunction(nullptr) {}
 
 void Compiler::compile(AST::Program& program, Runtime::Chunk* chunk) {

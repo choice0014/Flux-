@@ -7,23 +7,18 @@ CXX=g++
 CXXFLAGS="-std=c++20 -finput-charset=utf-8 -fexec-charset=utf-8"
 
 # Include directory path
-INCLUDES="-Iinclude"
+INCLUDES="-I../include"
 
-# List of source files
-SRCS="../src/main.cpp ../src/Lexer.cpp ../src/Parser.cpp ../src/Interpreter.cpp"
+# Link libraries
+LIBS="-lraylib -lGL -lm -lpthread -ldl -lrt -lX11"
 
-# Output executable name
-TARGET="flux_interpreter"
+# Common source files
+COMMON_SRCS="../src/Lexer.cpp ../src/Parser.cpp"
 
-echo "Starting compilation..."
+echo "Building Flux VM..."
+$CXX $CXXFLAGS $INCLUDES -DUSE_VM ../src/main.cpp $COMMON_SRCS ../src/Compiler.cpp ../src/VM.cpp $LIBS -o flux_vm
 
-# Run the g++ command
-$CXX $CXXFLAGS $SRCS $INCLUDES -o $TARGET
+echo "Building Flux Interpreter..."
+$CXX $CXXFLAGS $INCLUDES ../src/main.cpp $COMMON_SRCS ../src/Interpreter.cpp $LIBS -o flux_interpreter
 
-# Check if the build was successful
-if [ $? -eq 0 ]; then
-    echo "Build Successful! -> $TARGET"
-else
-    echo "Build Failed..."
-    exit 1
-fi
+echo "Build Successful!"

@@ -69,13 +69,29 @@ try {
 | **`time`** | 밀리초/초 단위 지연, 현재 시간 포맷팅 |
 | **`random`** | 난수 생성, 시드 설정, 배열 내 요소 무작위 선택 |
 
-## 🏗️ 빌드 방법 (Windows MSVC 기준)
+## 🏗️ 빌드 방법 (Cross-Platform)
 
-제공된 `build.bat`을 실행하거나 아래 명령어를 사용하세요:
+이 프로젝트는 **CMake**를 사용하여 Windows, Linux, macOS에서 빌드할 수 있습니다.
 
+### 1. CMake를 이용한 빌드 (추천)
+```bash
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+```
+빌드가 완료되면 `flux_vm` (바이트코드 VM)과 `flux_interpreter` (트리 워킹 인터프리터) 실행 파일이 생성됩니다.
+
+### 2. Windows MSVC (Legacy)
+제공된 `build/Build.bat`을 실행하거나 아래 명령어를 사용하세요:
 ```powershell
 cl /std:c++20 /utf-8 /EHsc /Iinclude src/*.cpp /Feflux_interpreter.exe
 ```
+
+## 🌍 크로스 컴파일 및 AI 에이전트 가이드
+다른 환경에서 빌드하거나, 다른 AI 에이전트(Claude, Gemini 등)에게 빌드를 요청하려면 `scripts/AI_BUILD_GUIDE.md`를 참조하세요.
+Linux에서 Windows용 `.exe`를 만들려면 `scripts/cross_compile.sh`를 사용할 수 있습니다.
+
 
 ## 🧪 실행 방법
 

@@ -21,7 +21,7 @@ struct ObjFunction {
     std::string name;
     int arity;
     std::shared_ptr<Chunk> chunk;
-    ObjFunction() : arity(0), chunk(std::make_shared<Chunk>()) {}
+    ObjFunction();
 };
 
 struct Array {

@@ -1,4 +1,5 @@
 #include "Interpreter.h"
+#include "GUI.h"
 #include <iostream>
 #include <cmath>
 #include <thread>
@@ -9,40 +10,6 @@
 #include <filesystem>
 #include <algorithm>
 #include <ctime>
-
-#ifdef _WIN32
-#define NOMINMAX
-#include <windows.h>
-#pragma comment(lib, "user32.lib")
-
-namespace Flux { class Interpreter; }
-static Flux::Interpreter* g_activeInterpreter = nullptr;
-static std::map<int, std::string> g_buttonCallbacks;
-static int g_nextControlId = 1000;
-static HWND g_hWnd = NULL;
-
-static std::wstring utf8ToWide(const std::string& str) {
-    if (str.empty()) return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-    std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
-    return wstrTo;
-}
-
-static LRESULT CALLBACK FluxWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-        case WM_COMMAND: {
-            int id = LOWORD(wp);
-            if (HIWORD(wp) == BN_CLICKED && g_buttonCallbacks.count(id) && g_activeInterpreter) {
-                g_activeInterpreter->callFluxFunction(g_buttonCallbacks[id]);
-            }
-            break;
-        }
-        case WM_DESTROY: PostQuitMessage(0); return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-#endif
 
 #include "Lexer.h"
 #include "Parser.h"
@@ -81,7 +48,6 @@ inline bool valuesEqual(const Runtime::Value& l, const Runtime::Value& r) {
 Interpreter::Interpreter() {
     globals = std::make_shared<Environment>();
     environment = globals;
-    g_activeInterpreter = this;
 }
 
 void Interpreter::interpret(AST::Program& program) {
@@ -116,16 +82,23 @@ void Interpreter::interpret(AST::Program& program) {
 
 void Interpreter::execute(AST::Statement& stmt) {
     if (auto* varDecl = dynamic_cast<AST::VarDeclaration*>(&stmt)) {
-        for (const auto& name : varDecl->names) {
+        for (const auto& decl : varDecl->decls) {
+            const std::string& name = decl->name;
             if (varDecl->isArray) {
                 auto arr = std::make_shared<Runtime::Array>();
                 arr->elementType = varDecl->type; environment->define(name, arr);
             } else {
-                if (varDecl->type == "int") environment->define(name, 0);
-                else if (varDecl->type == "float") environment->define(name, 0.0f);
-                else if (varDecl->type == "string") environment->define(name, std::string(""));
-                else if (varDecl->type == "bool") environment->define(name, false);
-                else environment->define(name, std::shared_ptr<Runtime::Object>(nullptr));
+                Runtime::Value initialValue;
+                if (decl->initializer) {
+                    initialValue = evaluate(*decl->initializer);
+                } else {
+                    if (varDecl->type == "int") initialValue = 0;
+                    else if (varDecl->type == "float") initialValue = 0.0f;
+                    else if (varDecl->type == "string") initialValue = std::string("");
+                    else if (varDecl->type == "bool") initialValue = false;
+                    else initialValue = std::shared_ptr<Runtime::Object>(nullptr);
+                }
+                environment->define(name, initialValue);
             }
         }
     } else if (auto* exprStmt = dynamic_cast<AST::ExpressionStmt*>(&stmt)) {
@@ -224,7 +197,8 @@ Runtime::Value Interpreter::evaluate(AST::Expression& expr) {
             }
         } else if (classes.count(newExpr->className)) {
             for (auto& p : classes[newExpr->className]->properties) {
-                for (const auto& n : p->names) {
+                for (const auto& decl : p->decls) {
+                    const std::string& n = decl->name;
                     if (p->type == "int") obj->members[n] = 0; else if (p->type == "float") obj->members[n] = 0.0f;
                     else if (p->type == "bool") obj->members[n] = false; else obj->members[n] = std::string("");
                 }
@@ -285,31 +259,39 @@ Runtime::Value Interpreter::evaluate(AST::Expression& expr) {
                 }
             } else if (importedModules.count(objName)) {
                 if (objName == "gui") {
-#ifdef _WIN32
                     if (subName == "msgbox") {
-                        MessageBoxW(g_hWnd, utf8ToWide(Runtime::valueToString(evaluate(*call->args[1]))).c_str(), utf8ToWide(Runtime::valueToString(evaluate(*call->args[0]))).c_str(), MB_OK | MB_ICONINFORMATION); return 0;
+                        GUI::messageBox(Runtime::valueToString(evaluate(*call->args[0])), Runtime::valueToString(evaluate(*call->args[1])));
+                        return 0;
                     }
                     if (subName == "window") {
-                        WNDCLASSW wc = {0}; wc.lpfnWndProc = FluxWndProc; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = L"FluxWindowClass";
-                        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); RegisterClassW(&wc);
-                        g_hWnd = CreateWindowExW(0, wc.lpszClassName, utf8ToWide(Runtime::valueToString(evaluate(*call->args[0]))).c_str(), WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, std::get<int>(evaluate(*call->args[1])), std::get<int>(evaluate(*call->args[2])), NULL, NULL, wc.hInstance, NULL); return 0;
+                        int w = std::get<int>(evaluate(*call->args[1])), h = std::get<int>(evaluate(*call->args[2]));
+                        GUI::initWindow(w, h, Runtime::valueToString(evaluate(*call->args[0])));
+                        return 0;
                     }
                     if (subName == "button") {
-                        std::wstring text = utf8ToWide(Runtime::valueToString(evaluate(*call->args[0])));
-                        int x = std::get<int>(evaluate(*call->args[1])), y = std::get<int>(evaluate(*call->args[2]));
-                        int w = std::get<int>(evaluate(*call->args[3])), h = std::get<int>(evaluate(*call->args[4]));
-                        std::string callback = Runtime::valueToString(evaluate(*call->args[5]));
-                        int id = g_nextControlId++; g_buttonCallbacks[id] = callback;
-                        CreateWindowExW(0, L"BUTTON", text.c_str(), WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, x, y, w, h, g_hWnd, (HMENU)id, GetModuleHandle(NULL), NULL); return 0;
+                        GUI::addControl(GUI::Control::BUTTON, 
+                            Runtime::valueToString(evaluate(*call->args[0])),
+                            (float)std::get<int>(evaluate(*call->args[1])),
+                            (float)std::get<int>(evaluate(*call->args[2])),
+                            (float)std::get<int>(evaluate(*call->args[3])),
+                            (float)std::get<int>(evaluate(*call->args[4])),
+                            Runtime::valueToString(evaluate(*call->args[5])));
+                        return 0;
                     }
                     if (subName == "label") {
-                        std::wstring text = utf8ToWide(Runtime::valueToString(evaluate(*call->args[0])));
-                        int x = std::get<int>(evaluate(*call->args[1])), y = std::get<int>(evaluate(*call->args[2]));
-                        int w = std::get<int>(evaluate(*call->args[3])), h = std::get<int>(evaluate(*call->args[4]));
-                        CreateWindowExW(0, L"STATIC", text.c_str(), WS_VISIBLE | WS_CHILD | SS_LEFT, x, y, w, h, g_hWnd, NULL, GetModuleHandle(NULL), NULL); return 0;
+                        GUI::addControl(GUI::Control::LABEL,
+                            Runtime::valueToString(evaluate(*call->args[0])),
+                            (float)std::get<int>(evaluate(*call->args[1])),
+                            (float)std::get<int>(evaluate(*call->args[2])),
+                            (float)std::get<int>(evaluate(*call->args[3])),
+                            (float)std::get<int>(evaluate(*call->args[4])));
+                        return 0;
                     }
-                    if (subName == "loop") { MSG msg; while (GetMessageW(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); } return 0; }
-#endif
+                    if (subName == "loop") {
+                        GUI::runLoop([this](const std::string& cb) { this->callFluxFunction(cb); });
+                        GUI::closeWindow();
+                        return 0;
+                    }
                 } else if (objName == "system") {
                     if (subName == "shell") return std::system(Runtime::valueToString(evaluate(*call->args[0])).c_str());
                     if (subName == "exit") std::exit(call->args.empty() ? 0 : std::get<int>(evaluate(*call->args[0])));
