@@ -224,6 +224,12 @@ InterpretResult VM::run() {
 #ifdef _WIN32
                                     SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), (WORD)std::get<int>(peek(0)));
 #endif
+                                } else if (subName == "input") {
+                                    std::string prompt = Runtime::valueToString(peek(0));
+                                    std::cout << prompt;
+                                    std::string input;
+                                    std::getline(std::cin, input);
+                                    pop(); pop(); push(input); break;
                                 }
                                 pop(); pop(); push(0); break;
                             }
@@ -241,10 +247,22 @@ InterpretResult VM::run() {
                                     std::ofstream f(path);
                                     if (f) f << content;
                                     pop(); pop(); pop(); push(0);
+                                } else if (subName == "append") {
+                                    std::string content = Runtime::valueToString(peek(1));
+                                    std::ofstream f(path, std::ios::app);
+                                    if (f) f << content;
+                                    pop(); pop(); pop(); push(0);
                                 } else if (subName == "exists") {
                                     pop(); pop(); push(std::filesystem::exists(path));
                                 } else if (subName == "remove") {
                                     std::filesystem::remove(path);
+                                    pop(); pop(); push(0);
+                                } else if (subName == "size") {
+                                    pop(); pop(); push((int)std::filesystem::file_size(path));
+                                } else if (subName == "is_dir") {
+                                    pop(); pop(); push(std::filesystem::is_directory(path));
+                                } else if (subName == "mkdir") {
+                                    std::filesystem::create_directories(path);
                                     pop(); pop(); push(0);
                                 } else { pop(); pop(); push(0); }
                                 break;
@@ -259,57 +277,37 @@ InterpretResult VM::run() {
                                     char buf[26]; ctime_s(buf, sizeof(buf), &now);
                                     std::string s(buf); if (!s.empty()) s.pop_back();
                                     pop(); push(s); break;
+                                } else if (subName == "ticks") {
+                                    auto now = std::chrono::steady_clock::now();
+                                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+                                    pop(); push((int)ms); break;
                                 }
                                 pop(); pop(); push(0); break;
                             }
 
-                            if (objName == "random") {
-                                if (subName == "range") {
-                                    int max = std::get<int>(peek(0));
-                                    int min = std::get<int>(peek(1));
-                                    pop(); pop(); pop(); push(min + (std::rand() % (max - min + 1)));
-                                } else if (subName == "seed") {
-                                    std::srand((unsigned int)std::get<int>(peek(0)));
-                                    pop(); pop(); push(0);
+                            if (objName == "system") {
+                                if (subName == "exit") std::exit(std::get<int>(pop()));
+                                else if (subName == "run") {
+                                    std::string cmd = Runtime::valueToString(pop());
+                                    pop(); push(system(cmd.c_str()));
+                                } else if (subName == "os") {
+#ifdef _WIN32
+                                    pop(); push(std::string("windows"));
+#else
+                                    pop(); push(std::string("linux"));
+#endif
+                                } else if (subName == "env") {
+                                    std::string key = Runtime::valueToString(pop());
+                                    char* val = nullptr;
+                                    size_t len = 0;
+                                    _dupenv_s(&val, &len, key.c_str());
+                                    std::string res = val ? val : "";
+                                    free(val);
+                                    pop(); push(res);
                                 } else { pop(); pop(); push(0); }
                                 break;
                             }
-                            
-                            auto objVal = globals.count(objName) ? globals[objName] : std::shared_ptr<Runtime::Object>(nullptr);
-                            
-                            if (std::holds_alternative<std::shared_ptr<Runtime::Object>>(objVal)) {
-                                auto obj = std::get<std::shared_ptr<Runtime::Object>>(objVal);
-                                if (obj) {
-                                    std::string methodFullName = obj->typeName + "." + subName;
-                                    if (globals.count(methodFullName) && std::holds_alternative<std::shared_ptr<Runtime::ObjFunction>>(globals[methodFullName])) {
-                                        auto func = std::get<std::shared_ptr<Runtime::ObjFunction>>(globals[methodFullName]);
-                                        *(stackTop - argCount - 1) = obj;
-                                        CallFrame* frame = &frames[frameCount++];
-                                        frame->chunk = func->chunk.get();
-                                        frame->ip = func->chunk->code.data();
-                                        frame->slots = stackTop - argCount - 1;
-                                        break; 
-                                    }
-                                }
-                            } else if (std::holds_alternative<std::string>(objVal)) {
-                                std::string s = std::get<std::string>(objVal);
-                                if (subName == "len") push((int)s.length());
-                                else if (subName == "upper") { std::transform(s.begin(), s.end(), s.begin(), ::toupper); push(s); }
-                                else if (subName == "lower") { std::transform(s.begin(), s.end(), s.begin(), ::tolower); push(s); }
-                                pop(); push(0);
-                            } else if (std::holds_alternative<std::shared_ptr<Runtime::Array>>(objVal)) {
-                                auto arr = std::get<std::shared_ptr<Runtime::Array>>(objVal);
-                                if (subName == "len") push((int)arr->elements.size());
-                                else if (subName == "append") { arr->elements.push_back(peek(0)); push(0); }
-                                else if (subName == "pop") { auto val = arr->elements.back(); arr->elements.pop_back(); push(val); }
-                                pop(); push(0);
-                            } else if (std::holds_alternative<int>(objVal) || std::holds_alternative<float>(objVal)) {
-                                double val = std::holds_alternative<int>(objVal) ? (double)std::get<int>(objVal) : (double)std::get<float>(objVal);
-                                if (subName == "abs") push((float)std::abs(val));
-                                else if (subName == "round") push((int)std::round(val));
 
-                                pop(); push(0);
-                            }
     #ifdef _WIN32
                             else if (objName == "gui") {
                                 if (subName == "msgbox") {
@@ -320,11 +318,18 @@ InterpretResult VM::run() {
                                     WNDCLASSW wc = {0}; wc.lpfnWndProc = FluxWndProc; wc.hInstance = GetModuleHandle(NULL);
                                     wc.lpszClassName = L"FluxWindowClass"; wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); RegisterClassW(&wc);
                                     g_hWnd = CreateWindowExW(0, wc.lpszClassName, utf8ToWide(t).c_str(), WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, w, h, NULL, NULL, wc.hInstance, NULL);
+                                } else if (subName == "button") {
+                                    std::string callback = Runtime::valueToString(pop());
+                                    int h = std::get<int>(pop()); int w = std::get<int>(pop());
+                                    int y = std::get<int>(pop()); int x = std::get<int>(pop());
+                                    std::string t = Runtime::valueToString(pop());
+                                    int id = g_nextControlId++;
+                                    g_buttonCallbacks[id] = callback;
+                                    CreateWindowExW(0, L"BUTTON", utf8ToWide(t).c_str(), WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, x, y, w, h, g_hWnd, (HMENU)(intptr_t)id, GetModuleHandle(NULL), NULL);
                                 } else if (subName == "loop") { MSG msg; while (GetMessageW(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); } }
                                 pop(); push(0);
                             } 
     #endif
-                            else if (objName == "system" && subName == "exit") std::exit(std::get<int>(pop()));
                         }
                     } else throw std::runtime_error("Can only call functions.");
                     break;
