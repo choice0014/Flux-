@@ -47,6 +47,11 @@ enum OpCode : uint8_t {
 
     OP_DEFINE_STRUCT, // 구조체 정의 등록
     OP_DEFINE_CLASS,  // 클래스 정의 등록
+
+    OP_TRY,           // 예외 핸들러 시작
+    OP_THROW,         // 예외 던지기
+    OP_END_TRY,       // 예외 핸들러 해제
+    OP_SPAWN,         // Spawn a new thread running a Flux function
 };
 
 } // namespace Flux

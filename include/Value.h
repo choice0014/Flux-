@@ -14,9 +14,17 @@ struct Array;
 struct Object;
 struct Map;
 struct ObjFunction;
+struct Method;
 class Chunk;
 
-using Value = std::variant<int, float, std::string, bool, std::shared_ptr<Array>, std::shared_ptr<Object>, std::shared_ptr<Map>, std::shared_ptr<ObjFunction>, void*>;
+using Value = std::variant<int, float, std::string, bool, std::shared_ptr<Array>, std::shared_ptr<Object>, std::shared_ptr<Map>, std::shared_ptr<ObjFunction>, std::shared_ptr<Method>, void*>;
+
+struct Method {
+    enum MethodType { ARRAY, MAP, STRING };
+    MethodType type;
+    std::string name;
+    Value target;
+};
 
 struct ObjFunction {
     std::string name;
@@ -65,6 +73,7 @@ inline std::string valueToString(const Value& val) {
     if (std::holds_alternative<std::shared_ptr<Map>>(val)) {
         return "[map]";
     }
+    if (std::holds_alternative<std::shared_ptr<Method>>(val)) return "[built-in method]";
     return "";
 }
 

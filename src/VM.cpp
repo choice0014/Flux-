@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -48,7 +50,122 @@ static LRESULT CALLBACK FluxWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 namespace Flux {
 
-VM::VM() : frameCount(0), stackTop(stack) {
+static Runtime::Value parseJsonValue(const std::string& source, size_t& pos) {
+    while (pos < source.size() && isspace(source[pos])) pos++;
+    if (pos >= source.size()) return std::shared_ptr<Runtime::Object>(nullptr);
+    
+    char c = source[pos];
+    if (c == '{') {
+        pos++;
+        auto map = std::make_shared<Runtime::Map>();
+        while (pos < source.size()) {
+            while (pos < source.size() && isspace(source[pos])) pos++;
+            if (source[pos] == '}') { pos++; break; }
+            Runtime::Value keyVal = parseJsonValue(source, pos);
+            std::string key = Runtime::valueToString(keyVal);
+            while (pos < source.size() && isspace(source[pos])) pos++;
+            if (source[pos] == ':') pos++;
+            map->elements[key] = parseJsonValue(source, pos);
+            while (pos < source.size() && isspace(source[pos])) pos++;
+            if (source[pos] == ',') pos++;
+            else if (source[pos] == '}') { pos++; break; }
+        }
+        return map;
+    }
+    if (c == '[') {
+        pos++;
+        auto arr = std::make_shared<Runtime::Array>();
+        while (pos < source.size()) {
+            while (pos < source.size() && isspace(source[pos])) pos++;
+            if (source[pos] == ']') { pos++; break; }
+            arr->elements.push_back(parseJsonValue(source, pos));
+            while (pos < source.size() && isspace(source[pos])) pos++;
+            if (source[pos] == ',') pos++;
+            else if (source[pos] == ']') { pos++; break; }
+        }
+        return arr;
+    }
+    if (c == '"') {
+        pos++; std::string s;
+        while (pos < source.size() && source[pos] != '"') {
+            if (source[pos] == '\\') {
+                pos++;
+                if (pos >= source.size()) break;
+                switch (source[pos]) {
+                    case '"':  s += '"'; break;
+                    case '\\': s += '\\'; break;
+                    case '/':  s += '/'; break;
+                    case 'n':  s += '\n'; break;
+                    case 't':  s += '\t'; break;
+                    case 'r':  s += '\r'; break;
+                    case 'b':  s += '\b'; break;
+                    case 'f':  s += '\f'; break;
+                    default:   s += source[pos]; break;
+                }
+            } else {
+                s += source[pos];
+            }
+            pos++;
+        }
+        if (pos < source.size()) pos++;
+        return s;
+    }
+    size_t start = pos;
+    while (pos < source.size() && !isspace(source[pos]) && source[pos] != ',' && source[pos] != '}' && source[pos] != ']') pos++;
+    std::string token = source.substr(start, pos - start);
+    if (token == "true") return true;
+    if (token == "false") return false;
+    if (token == "null") return std::shared_ptr<Runtime::Object>(nullptr);
+    try { if (token.find('.') != std::string::npos) return std::stof(token); return std::stoi(token); }
+    catch (...) { return token; }
+}
+
+static std::string stringifyJson(const Runtime::Value& val) {
+    if (std::holds_alternative<int>(val)) return std::to_string(std::get<int>(val));
+    if (std::holds_alternative<float>(val)) return std::to_string(std::get<float>(val));
+    if (std::holds_alternative<std::string>(val)) {
+        auto s = std::get<std::string>(val);
+        std::string escaped = "\"";
+        for (char ch : s) {
+            switch (ch) {
+                case '"':  escaped += "\\\""; break;
+                case '\\': escaped += "\\\\"; break;
+                case '\n': escaped += "\\n";  break;
+                case '\t': escaped += "\\t";  break;
+                case '\r': escaped += "\\r";  break;
+                case '\b': escaped += "\\b";  break;
+                case '\f': escaped += "\\f";  break;
+                default:   escaped += ch;      break;
+            }
+        }
+        escaped += "\"";
+        return escaped;
+    }
+    if (std::holds_alternative<bool>(val)) return std::get<bool>(val) ? "true" : "false";
+    if (std::holds_alternative<std::shared_ptr<Runtime::Array>>(val)) {
+        auto arr = std::get<std::shared_ptr<Runtime::Array>>(val);
+        std::string res = "[";
+        for (size_t i = 0; i < arr->elements.size(); ++i) {
+            res += stringifyJson(arr->elements[i]);
+            if (i + 1 < arr->elements.size()) res += ",";
+        }
+        return res + "]";
+    }
+    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(val)) {
+        auto map = std::get<std::shared_ptr<Runtime::Map>>(val);
+        std::string res = "{"; bool first = true;
+        for (auto const& [k, v] : map->elements) {
+            if (!first) res += ",";
+            res += "\"" + k + "\":" + stringifyJson(v);
+            first = false;
+        }
+        return res + "}";
+    }
+    return "null";
+}
+
+VM::VM() : frameCount(0), stackTop(stack), globals(std::make_shared<std::map<std::string, Runtime::Value>>()),
+           globalsMutex(std::make_shared<std::mutex>()) {
 #ifdef _WIN32
     g_activeVM = this;
 #endif
@@ -75,6 +192,7 @@ void VM::printStackTrace() {
 }
 
 InterpretResult VM::run() {
+    int initialFrameCount = frameCount;
     for (;;) {
         try {
             uint8_t instruction = readByte();
@@ -135,24 +253,45 @@ InterpretResult VM::run() {
 
                 case OP_DEFINE_GLOBAL: {
                     std::string name = std::get<std::string>(readConstant());
-                    globals[name] = pop(); break;
+                    Runtime::Value val = pop();
+                    {
+                        std::lock_guard<std::mutex> lock(*globalsMutex);
+                        (*globals)[name] = val;
+                    }
+                    break;
                 }
                 case OP_GET_GLOBAL: {
                     std::string name = std::get<std::string>(readConstant());
-                    if (globals.count(name)) push(globals[name]);
-                    else if (name.find('.') != std::string::npos) {
-                        size_t dot = name.find('.');
-                        std::string objName = name.substr(0, dot);
-                        std::string memName = name.substr(dot+1);
-                        if (globals.count(objName) && std::holds_alternative<std::shared_ptr<Runtime::Object>>(globals[objName])) {
-                            push(std::get<std::shared_ptr<Runtime::Object>>(globals[objName])->members[memName]);
-                        } else push(name); 
-                    } else throw std::runtime_error("Undefined variable '" + name + "'");
+                    Runtime::Value result;
+                    bool found = false;
+                    {
+                        std::lock_guard<std::mutex> lock(*globalsMutex);
+                        if (globals->count(name)) {
+                            result = (*globals)[name];
+                            found = true;
+                        } else if (name.find('.') != std::string::npos) {
+                            size_t dot = name.find('.');
+                            std::string objName = name.substr(0, dot);
+                            std::string memName = name.substr(dot+1);
+                            if (globals->count(objName) && std::holds_alternative<std::shared_ptr<Runtime::Object>>((*globals)[objName])) {
+                                result = std::get<std::shared_ptr<Runtime::Object>>((*globals)[objName])->members[memName];
+                                found = true;
+                            }
+                        }
+                    }
+                    if (found) push(result);
+                    else if (name.find('.') != std::string::npos) push(name);
+                    else throw std::runtime_error("Undefined variable '" + name + "'");
                     break;
                 }
                 case OP_SET_GLOBAL: {
                     std::string name = std::get<std::string>(readConstant());
-                    globals[name] = peek(0); break;
+                    Runtime::Value val = peek(0);
+                    {
+                        std::lock_guard<std::mutex> lock(*globalsMutex);
+                        (*globals)[name] = val;
+                    }
+                    break;
                 }
                 case OP_GET_LOCAL: push(frames[frameCount - 1].slots[readByte()]); break;
                 case OP_SET_LOCAL: frames[frameCount - 1].slots[readByte()] = peek(0); break;
@@ -182,6 +321,59 @@ InterpretResult VM::run() {
                         frame->chunk = func->chunk.get();
                         frame->ip = func->chunk->code.data();
                         frame->slots = stackTop - argCount - 1;
+                    } else if (std::holds_alternative<std::shared_ptr<Runtime::Method>>(callee)) {
+                        auto method = std::get<std::shared_ptr<Runtime::Method>>(callee);
+                        switch (method->type) {
+                            case Runtime::Method::ARRAY: {
+                                auto targetArr = std::get<std::shared_ptr<Runtime::Array>>(method->target);
+                                std::string& methodName = method->name;
+                                if (methodName == "map") {
+                                    auto callback = pop();
+                                    auto resultArr = std::make_shared<Runtime::Array>();
+                                    for (auto const& el : targetArr->elements) resultArr->elements.push_back(callValue(callback, {el}));
+                                    pop(); // pop the method object
+                                    push(resultArr); break;
+                                } else if (methodName == "filter") {
+                                    auto callback = pop();
+                                    auto resultArr = std::make_shared<Runtime::Array>();
+                                    for (auto const& el : targetArr->elements) {
+                                        auto res = callValue(callback, {el});
+                                        bool isTrue = (std::holds_alternative<bool>(res) && std::get<bool>(res)) || (std::holds_alternative<int>(res) && std::get<int>(res) != 0);
+                                        if (isTrue) resultArr->elements.push_back(el);
+                                    }
+                                    pop(); push(resultArr); break;
+                                } else if (methodName == "reduce") {
+                                    auto callback = pop(); auto initial = pop();
+                                    Runtime::Value acc = initial;
+                                    for (auto const& el : targetArr->elements) acc = callValue(callback, {acc, el});
+                                    pop(); push(acc); break;
+                                } else if (methodName == "sort") {
+                                    std::sort(targetArr->elements.begin(), targetArr->elements.end(), [](const Runtime::Value& a, const Runtime::Value& b) {
+                                        if (a.index() != b.index()) return a.index() < b.index();
+                                        if (std::holds_alternative<int>(a)) return std::get<int>(a) < std::get<int>(b);
+                                        if (std::holds_alternative<float>(a)) return std::get<float>(a) < std::get<float>(b);
+                                        if (std::holds_alternative<std::string>(a)) return std::get<std::string>(a) < std::get<std::string>(b);
+                                        return false;
+                                    });
+                                    pop(); push(targetArr); break;
+                                } else if (methodName == "len") {
+                                    pop(); push((int)targetArr->elements.size()); break;
+                                } else if (methodName == "append") {
+                                    targetArr->elements.push_back(pop());
+                                    pop(); push(0); break;
+                                }
+                                break;
+                            }
+                            case Runtime::Method::MAP: {
+                                throw std::runtime_error("Map methods not yet implemented");
+                            }
+                            case Runtime::Method::STRING: {
+                                throw std::runtime_error("String methods not yet implemented");
+                            }
+                        }
+                        break;
+                    } else if (std::holds_alternative<std::shared_ptr<Runtime::Object>>(callee)) {
+                        // Object calls handled elsewhere
                     } else if (std::holds_alternative<std::string>(callee)) {
                         std::string fullName = std::get<std::string>(callee);
                         if (fullName == "print") {
@@ -358,8 +550,47 @@ InterpretResult VM::run() {
                                     push(std::string(""));
                                 } else { pop(); pop(); push(0); }
                             }
+                            else if (objName == "json") {
+                                if (subName == "parse") {
+                                    std::string s = Runtime::valueToString(pop());
+                                    size_t p = 0;
+                                    pop(); // pop json
+                                    push(parseJsonValue(s, p));
+                                } else if (subName == "stringify") {
+                                    auto v = pop();
+                                    pop(); // pop json
+                                    push(stringifyJson(v));
+                                }
+                                break;
+                            }
                         }
                     } else throw std::runtime_error("Can only call functions.");
+                    break;
+                }
+                case OP_SPAWN: {
+                    int argCount = readByte();
+                    // Collect args (last pushed is top)
+                    std::vector<Runtime::Value> args;
+                    for (int i = argCount - 1; i >= 0; --i)
+                        args.push_back(peek(i));
+                    Runtime::Value func = peek(argCount);
+
+                    // Pop function + args from stack
+                    for (int i = 0; i <= argCount; ++i) pop();
+
+                    // Spawn thread
+                    std::thread t([this, func, args]() {
+                        VM spawnedVM;
+                        {
+                            std::lock_guard<std::mutex> lock(*globalsMutex);
+                            spawnedVM.globals = globals; // share the same map
+                            spawnedVM.globalsMutex = globalsMutex;
+                        }
+                        spawnedVM.callValue(func, args);
+                    });
+                    t.detach();
+
+                    push((int)0);
                     break;
                 }
                 case OP_NEW: {
@@ -390,8 +621,30 @@ InterpretResult VM::run() {
                 }
                 case OP_GET_PROPERTY: {
                     auto objVal = pop(); std::string name = std::get<std::string>(readConstant());
-                    if (std::holds_alternative<std::shared_ptr<Runtime::Object>>(objVal)) push(std::get<std::shared_ptr<Runtime::Object>>(objVal)->members[name]);
-                    else throw std::runtime_error("Property access on non-object.");
+                    if (std::holds_alternative<std::shared_ptr<Runtime::Object>>(objVal)) {
+                        auto obj = std::get<std::shared_ptr<Runtime::Object>>(objVal);
+                        if (!obj) throw std::runtime_error("Property access on null object.");
+                        push(obj->members[name]);
+                    } else if (std::holds_alternative<std::shared_ptr<Runtime::Array>>(objVal)) {
+                        auto m = std::make_shared<Runtime::Method>();
+                        m->type = Runtime::Method::ARRAY;
+                        m->name = name;
+                        m->target = objVal;
+                        push(m);
+                    } else if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(objVal)) {
+                        auto m = std::make_shared<Runtime::Method>();
+                        m->type = Runtime::Method::MAP;
+                        m->name = name;
+                        m->target = objVal;
+                        push(m);
+                    } else if (std::holds_alternative<std::string>(objVal)) {
+                        auto m = std::make_shared<Runtime::Method>();
+                        m->type = Runtime::Method::STRING;
+                        m->name = name;
+                        m->target = objVal;
+                        push(m);
+                    }
+                    else throw std::runtime_error("Property access on non-object type.");
                     break;
                 }
                 case OP_SET_PROPERTY: {
@@ -432,8 +685,42 @@ InterpretResult VM::run() {
                 case OP_DEFINE_CLASS: {
                     std::string name = std::get<std::string>(readConstant()); classes[name] = (AST::ClassDef*)std::get<void*>(readConstant()); break;
                 }
+                case OP_TRY: {
+                    uint16_t offset = (uint16_t)((readByte() << 8) | readByte());
+                    handlerStack.push_back({ frames[frameCount - 1].ip + offset, (int)(stackTop - stack), frameCount - 1 });
+                    break;
+                }
+                case OP_THROW: {
+                    Runtime::Value exception = pop();
+                    if (handlerStack.empty()) {
+                        throw std::runtime_error("Unhandled exception: " + Runtime::valueToString(exception));
+                    }
+                    ExceptionHandler handler = handlerStack.back();
+                    handlerStack.pop_back();
+
+                    // Unwind frames
+                    frameCount = handler.frameIndex + 1;
+                    // Restore stack
+                    stackTop = stack + handler.stackDepth;
+                    // Push exception value for catch block
+                    push(exception);
+                    // Jump to handler
+                    frames[frameCount - 1].ip = handler.handlerIP;
+                    break;
+                }
+                case OP_END_TRY: {
+                    if (!handlerStack.empty()) handlerStack.pop_back();
+                    break;
+                }
                 case OP_RETURN: {
-                    auto result = pop(); frameCount--;
+                    auto result = pop(); 
+                    while (!handlerStack.empty() && handlerStack.back().frameIndex == frameCount - 1) {
+                        handlerStack.pop_back();
+                    }
+                    frameCount--;
+                    if (frameCount < initialFrameCount) {
+                         push(result); return InterpretResult::INTERPRET_OK;
+                    }
                     if (frameCount == 0) return InterpretResult::INTERPRET_OK;
                     stackTop = frames[frameCount].slots; push(result); break;
                 }
@@ -446,18 +733,42 @@ InterpretResult VM::run() {
     }
 }
 
+Runtime::Value VM::callValue(Runtime::Value callee, const std::vector<Runtime::Value>& args) {
+    if (std::holds_alternative<std::shared_ptr<Runtime::ObjFunction>>(callee)) {
+        auto func = std::get<std::shared_ptr<Runtime::ObjFunction>>(callee);
+        Runtime::Value* savedStackTop = stackTop;
+        push(callee);
+        for (auto const& arg : args) push(arg);
+        CallFrame* frame = &frames[frameCount++];
+        frame->chunk = func->chunk.get();
+        frame->ip = func->chunk->code.data();
+        frame->slots = stackTop - args.size() - 1;
+        run();
+        Runtime::Value result = pop();
+        stackTop = savedStackTop;
+        return result;
+    }
+    return std::shared_ptr<Runtime::Object>(nullptr);
+}
+
 void VM::callFluxFunction(const std::string& name) {
-    if (globals.count(name)) {
-        auto val = globals[name];
-        if (std::holds_alternative<std::shared_ptr<Runtime::ObjFunction>>(val)) {
-             auto func = std::get<std::shared_ptr<Runtime::ObjFunction>>(val);
-             if (frameCount == FRAMES_MAX) return;
-             CallFrame* frame = &frames[frameCount++];
-             frame->chunk = func->chunk.get();
-             frame->ip = func->chunk->code.data();
-             frame->slots = stackTop;
-             run();
+    Runtime::Value val;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(*globalsMutex);
+        if (globals->count(name)) {
+            val = (*globals)[name];
+            found = true;
         }
+    }
+    if (found && std::holds_alternative<std::shared_ptr<Runtime::ObjFunction>>(val)) {
+         auto func = std::get<std::shared_ptr<Runtime::ObjFunction>>(val);
+         if (frameCount == FRAMES_MAX) return;
+         CallFrame* frame = &frames[frameCount++];
+         frame->chunk = func->chunk.get();
+         frame->ip = func->chunk->code.data();
+         frame->slots = stackTop;
+         run();
     }
 }
 

@@ -348,16 +348,27 @@ std::unique_ptr<AST::Expression> Parser::parsePostfix() {
             if (AST::VariableExpr* v = dynamic_cast<AST::VariableExpr*>(expr.get())) {
                 if (v->name == "printf") {
                     if (args.empty()) throw std::runtime_error("printf expects a format string.");
-                    // printf는 별도의 AST 노드를 사용하므로 여기서는 간단히 string literal만 지원하도록 제약하거나
-                    // 기존 parsePrintfInterpolation 로직을 타게 해야 함.
-                    // MVP에서는 간단히 처리하기 위해 CallExpr로 유지하고 Interpreter에서 처리.
                 }
                 expr = std::make_unique<AST::CallExpr>(v->name, std::move(args));
             } else if (AST::MemberAccessExpr* m = dynamic_cast<AST::MemberAccessExpr*>(expr.get())) {
-                if (AST::VariableExpr* obj = dynamic_cast<AST::VariableExpr*>(m->object.get())) {
-                    expr = std::make_unique<AST::CallExpr>(obj->name + "." + m->memberName, std::move(args));
+                // Check if this is a module method call (like json.parse, math.sqrt)
+                // Module names use the old dotted CallExpr approach for backward compatibility
+                bool isModuleCall = false;
+                if (auto* varObj = dynamic_cast<AST::VariableExpr*>(m->object.get())) {
+                    const std::string& n = varObj->name;
+                    if (n == "json" || n == "math" || n == "console" || n == "file" ||
+                        n == "time" || n == "system" || n == "net" || n == "gui") {
+                        isModuleCall = true;
+                    }
+                }
+                if (isModuleCall) {
+                    auto* varObj = dynamic_cast<AST::VariableExpr*>(m->object.get());
+                    expr = std::make_unique<AST::CallExpr>(varObj->name + "." + m->memberName, std::move(args));
                 } else {
-                    throw std::runtime_error("Complex method calls not supported yet.");
+                    // Real method call on an object (array, map, string, etc.)
+                    auto obj = std::move(m->object);
+                    std::string methodName = m->memberName;
+                    expr = std::make_unique<AST::MethodCallExpr>(std::move(obj), methodName, std::move(args));
                 }
             } else {
                 throw std::runtime_error("Invalid call target.");

@@ -196,6 +196,23 @@ void Compiler::compileStatement(AST::Statement& stmt) {
 
         for (auto& s : program->statements) compileStatement(*s);
 
+    } else if (auto* throwStmt = dynamic_cast<AST::ThrowStmt*>(&stmt)) {
+        compileExpression(*throwStmt->value);
+        emitByte(OP_THROW);
+    } else if (auto* tryCatch = dynamic_cast<AST::TryCatchStmt*>(&stmt)) {
+        int tryJump = emitJump(OP_TRY);
+        compileStatement(*tryCatch->tryBlock);
+        emitByte(OP_END_TRY);
+        int skipCatch = emitJump(OP_JUMP);
+
+        patchJump(tryJump);
+        
+        beginScope();
+        locals.push_back({tryCatch->exceptionVarName, scopeDepth});
+        compileStatement(*tryCatch->catchBlock);
+        endScope();
+
+        patchJump(skipCatch);
     } else if (auto* sd = dynamic_cast<AST::StructDef*>(&stmt)) {
         int nameIdx = currentChunk->addConstant(sd->name);
         int ptrIdx = currentChunk->addConstant((void*)sd);
@@ -303,11 +320,31 @@ void Compiler::compileExpression(AST::Expression& expr) {
             case TokenType::T_LESS: emitByte(OP_LESS); break;
             default: break;
         }
+    } else if (auto* mc = dynamic_cast<AST::MethodCallExpr*>(&expr)) {
+        // 1. Compile the target object (array/map/string)
+        compileExpression(*mc->object);
+        // 2. Emit OP_GET_PROPERTY with the method name
+        int nameIdx = currentChunk->addConstant(mc->methodName);
+        emitByte(OP_GET_PROPERTY);
+        emitByte((uint8_t)nameIdx);
+        // 3. Compile arguments
+        for (auto& arg : mc->args) compileExpression(*arg);
+        // 4. Emit OP_CALL
+        emitByte(OP_CALL);
+        emitByte((uint8_t)mc->args.size());
     } else if (auto* call = dynamic_cast<AST::CallExpr*>(&expr)) {
         if (call->callee == "print") {
             compileExpression(*call->args[0]);
             emitByte(OP_PRINT);
             emitByte(OP_NULL); 
+        } else if (call->callee == "spawn") {
+            if (call->args.empty())
+                throw std::runtime_error("spawn requires at least a function argument.");
+            compileExpression(*call->args[0]); // the function
+            for (size_t i = 1; i < call->args.size(); ++i)
+                compileExpression(*call->args[i]); // the args for the function
+            emitByte(OP_SPAWN);
+            emitByte((uint8_t)(call->args.size() - 1));
         } else {
             // Function call
             int index = currentChunk->addConstant(call->callee);

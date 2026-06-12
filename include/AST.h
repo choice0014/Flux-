@@ -73,6 +73,16 @@ public:
         : object(std::move(obj)), memberName(member) {}
 };
 
+class MethodCallExpr : public Expression {
+public:
+    std::unique_ptr<Expression> object;
+    std::string methodName;
+    std::vector<std::unique_ptr<Expression>> args;
+    MethodCallExpr(std::unique_ptr<Expression> obj, std::string m,
+                   std::vector<std::unique_ptr<Expression>> a)
+        : object(std::move(obj)), methodName(m), args(std::move(a)) {}
+};
+
 class MemberAssignment : public Expression {
 public:
     std::unique_ptr<MemberAccessExpr> memberAccess;
