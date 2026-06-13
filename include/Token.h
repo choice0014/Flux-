@@ -1,4 +1,4 @@
-#ifndef FLUX_TOKEN_H
+﻿#ifndef FLUX_TOKEN_H
 #define FLUX_TOKEN_H
 
 #include <string>
@@ -8,7 +8,7 @@ namespace Flux {
 enum class TokenType {
     // Keywords
     T_FUNCTION, T_INT, T_FLOAT, T_STRING, T_BOOL,
-    T_IF, T_ELSE, T_WHILE, T_RETURN,
+    T_IF, T_ELSE, T_WHILE, T_RETURN, T_IMPORT,
     T_TRUE, T_FALSE,
 
     // Identifiers & Literals
@@ -16,7 +16,7 @@ enum class TokenType {
 
     // Operators & Symbols
     T_LPAREN, T_RPAREN, T_LBRACE, T_RBRACE,
-    T_COMMA, T_SEMICOLON, T_EQUALS,
+    T_COMMA, T_SEMICOLON, T_EQUALS, T_DOT,
     T_PLUS, T_MINUS, T_STAR, T_SLASH, T_PERCENT,
     T_PLUS_EQUAL, T_MINUS_EQUAL, T_STAR_EQUAL, T_SLASH_EQUAL,
     

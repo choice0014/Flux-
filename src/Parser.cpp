@@ -1,4 +1,4 @@
-#include "Parser.h"
+﻿#include "Parser.h"
 #include "Lexer.h"
 #include <stdexcept>
 
@@ -26,12 +26,13 @@ std::unique_ptr<AST::Program> Parser::parse() {
 }
 
 std::unique_ptr<AST::Statement> Parser::parseStatement() {
+    if (match(TokenType::T_IMPORT)) return parseImportStmt();
     if (match(TokenType::T_FUNCTION)) return parseFunctionDef();
     if (match(TokenType::T_IF)) return parseIfStmt();
     if (match(TokenType::T_WHILE)) return parseWhileStmt();
     if (match(TokenType::T_LBRACE)) return std::make_unique<AST::BlockStmt>(parseBlock());
 
-    // 변수 선언 체크 (IDENTIFIER IDENTIFIER 패턴만 선언으로 간주)
+    // Variable declaration check
     if (check(TokenType::T_INT) || check(TokenType::T_FLOAT) || check(TokenType::T_STRING) || check(TokenType::T_BOOL) ||
         (check(TokenType::T_IDENTIFIER) && pos + 1 < tokens.size() && tokens[pos+1].type == TokenType::T_IDENTIFIER)) {
         
@@ -43,6 +44,12 @@ std::unique_ptr<AST::Statement> Parser::parseStatement() {
     auto expr = parseExpression();
     consume(TokenType::T_SEMICOLON, "Expect ';' after expression.");
     return std::make_unique<AST::ExpressionStmt>(std::move(expr));
+}
+
+std::unique_ptr<AST::Statement> Parser::parseImportStmt() {
+    std::string name = consume(TokenType::T_STRING_LITERAL, "Expect module name string after 'import'.").value;
+    consume(TokenType::T_SEMICOLON, "Expect ';' after import statement.");
+    return std::make_unique<AST::ImportStmt>(name);
 }
 
 std::vector<std::unique_ptr<AST::Statement>> Parser::parseBlock() {
@@ -206,21 +213,17 @@ std::unique_ptr<AST::Expression> Parser::parseUnary() {
 std::unique_ptr<AST::Expression> Parser::parsePostfix() {
     auto expr = parsePrimary();
     while (true) {
-        if (match(TokenType::T_LPAREN)) {
+        if (match(TokenType::T_DOT)) {
+            std::string prop = consume(TokenType::T_IDENTIFIER,
+                "Expect property name after '.'.").value;
+            expr = std::make_unique<AST::DotAccessExpr>(std::move(expr), prop);
+        } else if (match(TokenType::T_LPAREN)) {
             std::vector<std::unique_ptr<AST::Expression>> args;
             if (!check(TokenType::T_RPAREN)) {
                 do { args.push_back(parseExpression()); } while (match(TokenType::T_COMMA));
             }
             consume(TokenType::T_RPAREN, "Expect ')' after arguments.");
-
-            if (AST::VariableExpr* v = dynamic_cast<AST::VariableExpr*>(expr.get())) {
-                if (v->name == "printf") {
-                    if (args.empty()) throw std::runtime_error("printf expects a format string.");
-                }
-                expr = std::make_unique<AST::CallExpr>(v->name, std::move(args));
-            } else {
-                throw std::runtime_error("Invalid call target.");
-            }
+            expr = std::make_unique<AST::CallExpr>(std::move(expr), std::move(args));
         } else {
             break;
         }
@@ -246,3 +249,4 @@ std::unique_ptr<AST::Expression> Parser::parsePrimary() {
 }
 
 } // namespace Flux
+

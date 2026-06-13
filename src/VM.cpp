@@ -1,12 +1,81 @@
 ﻿#include "VM.h"
 #include "OpCode.h"
 #include "AST.h"
+#include "FluxModule.h"
 #include <iostream>
 #include <stdexcept>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace Flux {
 
 VM::VM() : frameCount(0), stackTop(stack), globals(std::make_shared<std::map<std::string, Runtime::Value>>()) {
+    registerBuiltins();
+}
+
+void VM::registerBuiltins() {
+    auto printFn = std::make_shared<Runtime::NativeFn>();
+    printFn->name = "print";
+    printFn->arity = 1;
+    printFn->fn = [](const std::vector<Runtime::Value>& args) -> Runtime::Value {
+        std::cout << Runtime::valueToString(args[0]) << std::endl;
+        return 0;
+    };
+    (*globals)["print"] = printFn;
+}
+
+void VM::loadModule(const std::string& name) {
+    if (loadedModules.count(name)) return;
+
+#ifdef _WIN32
+    std::string dllPath = "modules/" + name + ".dll";
+    HMODULE hModule = LoadLibraryA(dllPath.c_str());
+    if (!hModule) {
+        throw std::runtime_error("Could not load module '" + name + "'.");
+    }
+
+    auto apiVersion = reinterpret_cast<int(*)()>(
+        GetProcAddress(hModule, "flux_module_api_version"));
+    auto moduleName = reinterpret_cast<const char*(*)()>(
+        GetProcAddress(hModule, "flux_module_name"));
+    auto funcCount = reinterpret_cast<int(*)()>(
+        GetProcAddress(hModule, "flux_module_function_count"));
+    auto getFunc = reinterpret_cast<void(*)(int, const char**, int*, void**)>(
+        GetProcAddress(hModule, "flux_module_get_function"));
+
+    if (!apiVersion || !moduleName || !funcCount || !getFunc) {
+        FreeLibrary(hModule);
+        throw std::runtime_error("Module '" + name + "' missing required exports.");
+    }
+
+    if (apiVersion() != FLUX_MODULE_API_VERSION) {
+        FreeLibrary(hModule);
+        throw std::runtime_error("Module '" + name + "' API version mismatch.");
+    }
+
+    int count = funcCount();
+    auto mapVal = std::make_shared<Runtime::MapValue>();
+    for (int i = 0; i < count; i++) {
+        const char* fnName = nullptr;
+        int fnArity = 0;
+        void* fnPtr = nullptr;
+        getFunc(i, &fnName, &fnArity, &fnPtr);
+
+        auto nativeFn = std::make_shared<Runtime::NativeFn>();
+        nativeFn->name = fnName ? fnName : "";
+        nativeFn->arity = fnArity;
+        nativeFn->fn = reinterpret_cast<Runtime::Value(*)(const std::vector<Runtime::Value>&)>(fnPtr);
+
+        mapVal->entries[nativeFn->name] = nativeFn;
+    }
+
+    (*globals)[name] = mapVal;
+    loadedModules.insert(name);
+#else
+    throw std::runtime_error("Module loading is only supported on Windows.");
+#endif
 }
 
 InterpretResult VM::interpret(Runtime::Chunk* chunk) {
@@ -130,25 +199,69 @@ InterpretResult VM::run() {
                     uint16_t offset = (uint16_t)((readByte() << 8) | readByte());
                     frames[frameCount - 1].ip -= offset; break;
                 }
+
+                case OP_LOAD_MODULE: {
+                    std::string moduleName = std::get<std::string>(readConstant());
+                    loadModule(moduleName);
+                    break;
+                }
+
+                case OP_GET_PROPERTY: {
+                    std::string prop = std::get<std::string>(readConstant());
+                    Runtime::Value obj = pop();
+                    if (auto* mapPtr = std::get_if<std::shared_ptr<Runtime::MapValue>>(&obj)) {
+                        auto& entries = (*mapPtr)->entries;
+                        auto it = entries.find(prop);
+                        if (it != entries.end()) {
+                            push(it->second);
+                        } else {
+                            throw std::runtime_error("Module has no function '" + prop + "'");
+                        }
+                    } else {
+                        throw std::runtime_error("Can only access properties on a module.");
+                    }
+                    break;
+                }
+
                 case OP_CALL: {
                     int argCount = readByte();
-                    auto callee = peek(argCount);
-                    if (std::holds_alternative<std::shared_ptr<Runtime::ObjFunction>>(callee)) {
-                        auto func = std::get<std::shared_ptr<Runtime::ObjFunction>>(callee);
+                    Runtime::Value callee = peek(argCount);
+
+                    if (auto* funcPtr = std::get_if<std::shared_ptr<Runtime::ObjFunction>>(&callee)) {
+                        auto func = *funcPtr;
+                        if (func->arity != argCount) {
+                            throw std::runtime_error("Function '" + func->name +
+                                "' expects " + std::to_string(func->arity) +
+                                " arguments, got " + std::to_string(argCount));
+                        }
                         if (frameCount == FRAMES_MAX) throw std::runtime_error("Stack overflow.");
                         CallFrame* frame = &frames[frameCount++];
                         frame->chunk = func->chunk.get();
                         frame->ip = func->chunk->code.data();
                         frame->slots = stackTop - argCount - 1;
-                    } else if (std::holds_alternative<std::string>(callee)) {
-                        std::string name = std::get<std::string>(callee);
-                        if (name == "print") {
-                            std::cout << Runtime::valueToString(peek(0)) << std::endl;
-                            pop(); pop(); push(0);
-                        } else throw std::runtime_error("Can only call functions.");
-                    } else throw std::runtime_error("Can only call functions.");
+
+                    } else if (auto* nativePtr = std::get_if<std::shared_ptr<Runtime::NativeFn>>(&callee)) {
+                        auto nativeFn = *nativePtr;
+                        if (nativeFn->arity >= 0 && nativeFn->arity != argCount) {
+                            throw std::runtime_error("Native function '" + nativeFn->name +
+                                "' expects " + std::to_string(nativeFn->arity) +
+                                " arguments, got " + std::to_string(argCount));
+                        }
+                        std::vector<Runtime::Value> args;
+                        args.reserve(argCount);
+                        for (int i = argCount - 1; i >= 0; i--) {
+                            args.push_back(peek(i));
+                        }
+                        stackTop -= (argCount + 1);
+                        Runtime::Value result = nativeFn->fn(args);
+                        push(result);
+
+                    } else {
+                        throw std::runtime_error("Can only call functions.");
+                    }
                     break;
                 }
+
                 case OP_RETURN: {
                     auto result = pop(); 
                     frameCount--;
@@ -204,3 +317,4 @@ void VM::callFluxFunction(const std::string& name) {
 }
 
 } // namespace Flux
+

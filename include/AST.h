@@ -1,4 +1,4 @@
-#ifndef FLUX_AST_H
+﻿#ifndef FLUX_AST_H
 #define FLUX_AST_H
 
 #include <string>
@@ -43,12 +43,20 @@ public:
     UnaryExpr(Token o, std::unique_ptr<Expression> expr) : op(o), operand(std::move(expr)) {}
 };
 
+class DotAccessExpr : public Expression {
+public:
+    std::unique_ptr<Expression> object;
+    std::string property;
+    DotAccessExpr(std::unique_ptr<Expression> obj, std::string prop)
+        : object(std::move(obj)), property(prop) {}
+};
+
 class CallExpr : public Expression {
 public:
-    std::string callee;
+    std::unique_ptr<Expression> callee;
     std::vector<std::unique_ptr<Expression>> args;
-    CallExpr(std::string c, std::vector<std::unique_ptr<Expression>> a)
-        : callee(c), args(std::move(a)) {}
+    CallExpr(std::unique_ptr<Expression> c, std::vector<std::unique_ptr<Expression>> a)
+        : callee(std::move(c)), args(std::move(a)) {}
 };
 
 struct VariableDeclaration {
@@ -62,6 +70,12 @@ public:
     std::vector<std::unique_ptr<VariableDeclaration>> decls;
     VarDeclaration(std::string t, std::vector<std::unique_ptr<VariableDeclaration>> d)
         : type(t), decls(std::move(d)) {}
+};
+
+class ImportStmt : public Statement {
+public:
+    std::string moduleName;
+    ImportStmt(std::string n) : moduleName(n) {}
 };
 
 class BlockStmt : public Statement {

@@ -14,6 +14,7 @@ const std::map<std::string, TokenType> Lexer::keywords = {
     {"else", TokenType::T_ELSE},
     {"while", TokenType::T_WHILE},
     {"return", TokenType::T_RETURN},
+    {"import", TokenType::T_IMPORT},
     {"true", TokenType::T_TRUE},
     {"false", TokenType::T_FALSE},
     {"and", TokenType::T_AND_AND},
@@ -36,6 +37,13 @@ char Lexer::advance() {
 bool Lexer::isAtEnd() const { return pos >= source.length(); }
 
 void Lexer::skipWhitespaceAndComments() {
+    // Skip UTF-8 BOM
+    if (pos == 0 && source.size() >= 3 && 
+        (unsigned char)source[0] == 0xEF && 
+        (unsigned char)source[1] == 0xBB && 
+        (unsigned char)source[2] == 0xBF) {
+        pos = 3; column = 4;
+    }
     while (!isAtEnd()) {
         unsigned char c = static_cast<unsigned char>(peek());
         if (std::isspace(c)) advance();
@@ -111,6 +119,7 @@ std::vector<Token> Lexer::tokenize() {
                 case '}': tokens.push_back(Token(TokenType::T_RBRACE, "}", line, sc)); break;
                 case ',': tokens.push_back(Token(TokenType::T_COMMA, ",", line, sc)); break;
                 case ';': tokens.push_back(Token(TokenType::T_SEMICOLON, ";", line, sc)); break;
+                case '.': tokens.push_back(Token(TokenType::T_DOT, ".", line, sc)); break;
                 case '=': 
                     if (peek() == '=') { advance(); tokens.push_back(Token(TokenType::T_EQUAL_EQUAL, "==", line, sc)); }
                     else tokens.push_back(Token(TokenType::T_EQUALS, "=", line, sc)); 

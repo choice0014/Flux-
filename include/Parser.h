@@ -1,4 +1,4 @@
-#ifndef FLUX_PARSER_H
+﻿#ifndef FLUX_PARSER_H
 #define FLUX_PARSER_H
 
 #include "Token.h"
@@ -32,6 +32,7 @@ private:
     std::unique_ptr<AST::Statement> parseReturnStmt();
     std::unique_ptr<AST::Statement> parseFunctionDef();
     std::unique_ptr<AST::Statement> parseVarDeclaration();
+    std::unique_ptr<AST::Statement> parseImportStmt();
 
     std::unique_ptr<AST::Expression> parseExpression();
     std::unique_ptr<AST::Expression> parseAssignment();

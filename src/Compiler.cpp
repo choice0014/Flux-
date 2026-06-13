@@ -92,6 +92,10 @@ void Compiler::compileStatement(AST::Statement& stmt) {
                 emitByte((uint8_t)index);
             }
         }
+    } else if (auto* imp = dynamic_cast<AST::ImportStmt*>(&stmt)) {
+        int idx = currentChunk->addConstant(imp->moduleName);
+        emitByte(OP_LOAD_MODULE);
+        emitByte((uint8_t)idx);
     } else if (auto* func = dynamic_cast<AST::FunctionDef*>(&stmt)) {
         auto fnObj = std::make_shared<Runtime::ObjFunction>();
         fnObj->name = func->name;
@@ -201,16 +205,13 @@ void Compiler::compileExpression(AST::Expression& expr) {
             case TokenType::T_LESS: emitByte(OP_LESS); break;
             default: break;
         }
+    } else if (auto* dot = dynamic_cast<AST::DotAccessExpr*>(&expr)) {
+        compileExpression(*dot->object);
+        int idx = currentChunk->addConstant(dot->property);
+        emitByte(OP_GET_PROPERTY);
+        emitByte((uint8_t)idx);
     } else if (auto* call = dynamic_cast<AST::CallExpr*>(&expr)) {
-        if (call->callee == "print") {
-            int idx = currentChunk->addConstant(std::string("print"));
-            emitByte(OP_CONSTANT);
-            emitByte((uint8_t)idx);
-        } else {
-            int idx = currentChunk->addConstant(call->callee);
-            emitByte(OP_GET_GLOBAL);
-            emitByte((uint8_t)idx);
-        }
+        compileExpression(*call->callee);
         for (auto& arg : call->args) compileExpression(*arg);
         emitByte(OP_CALL);
         emitByte((uint8_t)call->args.size());
@@ -218,3 +219,4 @@ void Compiler::compileExpression(AST::Expression& expr) {
 }
 
 } // namespace Flux
+

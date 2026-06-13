@@ -1,10 +1,11 @@
-#ifndef FLUX_VM_H
+﻿#ifndef FLUX_VM_H
 #define FLUX_VM_H
 
 #include "Chunk.h"
 #include <vector>
 #include <map>
 #include <string>
+#include <unordered_set>
 
 namespace Flux {
 
@@ -42,14 +43,18 @@ private:
     Runtime::Value* stackTop;
 
     std::shared_ptr<std::map<std::string, Runtime::Value>> globals;
+    std::unordered_set<std::string> loadedModules;
 
     uint8_t readByte() { return *frames[frameCount - 1].ip++; }
     Runtime::Value readConstant() { return frames[frameCount - 1].chunk->constants[readByte()]; }
 
     InterpretResult run();
     void printStackTrace();
+    void registerBuiltins();
+    void loadModule(const std::string& name);
 };
 
 } // namespace Flux
 
 #endif
+
