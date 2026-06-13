@@ -16,9 +16,17 @@
 #define NOMINMAX
 #include <windows.h>
 #include <wininet.h>
+#include <process.h>
+#include <conio.h>
+#include <shlwapi.h>
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "wininet.lib")
+#pragma comment(lib, "shlwapi.lib")
+#else
+#include <unistd.h>
+#endif
 
+#ifdef _WIN32
 namespace Flux { class VM; }
 static Flux::VM* g_activeVM = nullptr;
 static std::map<int, std::string> g_buttonCallbacks;
@@ -47,6 +55,9 @@ static LRESULT CALLBACK FluxWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 #endif
+
+static int g_netLastStatus = 0;
+static std::string g_netLastHeaders;
 
 namespace Flux {
 
@@ -160,6 +171,56 @@ static std::string stringifyJson(const Runtime::Value& val) {
             first = false;
         }
         return res + "}";
+    }
+    return "null";
+}
+
+static std::string stringifyJsonPretty(const Runtime::Value& v, int indent = 0) {
+    std::string ind(indent, ' ');
+    if (std::holds_alternative<int>(v)) return std::to_string(std::get<int>(v));
+    if (std::holds_alternative<float>(v)) return std::to_string(std::get<float>(v));
+    if (std::holds_alternative<std::string>(v)) {
+        auto s = std::get<std::string>(v);
+        std::string escaped = "\"";
+        for (char ch : s) {
+            switch (ch) {
+                case '"':  escaped += "\\\""; break;
+                case '\\': escaped += "\\\\"; break;
+                case '\n': escaped += "\\n";  break;
+                case '\t': escaped += "\\t";  break;
+                case '\r': escaped += "\\r";  break;
+                case '\b': escaped += "\\b";  break;
+                case '\f': escaped += "\\f";  break;
+                default:   escaped += ch;      break;
+            }
+        }
+        escaped += "\"";
+        return escaped;
+    }
+    if (std::holds_alternative<bool>(v)) return std::get<bool>(v) ? "true" : "false";
+    if (std::holds_alternative<std::shared_ptr<Runtime::Array>>(v)) {
+        auto arr = std::get<std::shared_ptr<Runtime::Array>>(v);
+        if (arr->elements.empty()) return "[]";
+        std::string r = "[\n";
+        bool first = true;
+        for (auto& el : arr->elements) {
+            if (!first) r += ",\n";
+            first = false;
+            r += ind + "  " + stringifyJsonPretty(el, indent + 2);
+        }
+        return r + "\n" + ind + "]";
+    }
+    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(v)) {
+        auto map = std::get<std::shared_ptr<Runtime::Map>>(v);
+        if (map->elements.empty()) return "{}";
+        std::string r = "{\n";
+        bool first = true;
+        for (auto& [k, v] : map->elements) {
+            if (!first) r += ",\n";
+            first = false;
+            r += ind + "  \"" + k + "\": " + stringifyJsonPretty(v, indent + 2);
+        }
+        return r + "\n" + ind + "}";
     }
     return "null";
 }
@@ -424,6 +485,46 @@ InterpretResult VM::run() {
                                     std::string input;
                                     std::getline(std::cin, input);
                                     pop(); pop(); push(input); break;
+                                } else if (subName == "width") {
+#ifdef _WIN32
+                                    CONSOLE_SCREEN_BUFFER_INFO csbi; GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+                                    pop(); push(csbi.srWindow.Right - csbi.srWindow.Left + 1); break;
+#else
+                                    pop(); push(80); break;
+#endif
+                                } else if (subName == "height") {
+#ifdef _WIN32
+                                    CONSOLE_SCREEN_BUFFER_INFO csbi; GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+                                    pop(); push(csbi.srWindow.Bottom - csbi.srWindow.Top + 1); break;
+#else
+                                    pop(); push(24); break;
+#endif
+                                } else if (subName == "cursor") {
+#ifdef _WIN32
+                                    int x = std::get<int>(peek(0)); int y = std::get<int>(peek(1));
+                                    SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), COORD{(SHORT)x, (SHORT)y});
+#endif
+                                    pop(); pop(); pop(); push(0); break;
+                                } else if (subName == "readkey") {
+#ifdef _WIN32
+                                    char ch = (char)_getch();
+                                    if (ch == -32 || ch == 0) { _getch(); } // discard extended key code
+                                    pop(); push(std::string(1, ch)); break;
+#else
+                                    pop(); push(std::string("")); break;
+#endif
+                                } else if (subName == "beep") {
+#ifdef _WIN32
+                                    Beep(800, 200);
+#else
+                                    printf("\a");
+#endif
+                                    pop(); push(0); break;
+                                } else if (subName == "reset") {
+#ifdef _WIN32
+                                    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), 7);
+#endif
+                                    pop(); push(0); break;
                                 }
                                 pop(); pop(); push(0); break;
                             }
@@ -458,6 +559,16 @@ InterpretResult VM::run() {
                                 } else if (subName == "mkdir") {
                                     std::filesystem::create_directories(path);
                                     pop(); pop(); push(0);
+                                } else if (subName == "copy") {
+                                    std::string dst = Runtime::valueToString(peek(0));
+                                    std::string src = Runtime::valueToString(peek(1));
+                                    try { std::filesystem::copy(src, dst, std::filesystem::copy_options::overwrite_existing); } catch (...) {}
+                                    pop(); pop(); pop(); push(0);
+                                } else if (subName == "rename") {
+                                    std::string newName = Runtime::valueToString(peek(0));
+                                    std::string oldName = Runtime::valueToString(peek(1));
+                                    try { std::filesystem::rename(oldName, newName); } catch (...) {}
+                                    pop(); pop(); pop(); push(0);
                                 } else { pop(); pop(); push(0); }
                                 break;
                             }
@@ -475,6 +586,30 @@ InterpretResult VM::run() {
                                     auto now = std::chrono::steady_clock::now();
                                     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
                                     pop(); push((int)ms); break;
+                                } else if (subName == "year") {
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    pop(); push(1900 + ltm.tm_year); break;
+                                } else if (subName == "month") {
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    pop(); push(1 + ltm.tm_mon); break;
+                                } else if (subName == "date") {
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    char buf[11]; std::strftime(buf, sizeof(buf), "%Y-%m-%d", &ltm);
+                                    pop(); push(std::string(buf)); break;
+                                } else if (subName == "hour") {
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    pop(); push(ltm.tm_hour); break;
+                                } else if (subName == "minute") {
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    pop(); push(ltm.tm_min); break;
+                                } else if (subName == "second") {
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    pop(); push(ltm.tm_sec); break;
+                                } else if (subName == "format") {
+                                    std::string fmt = Runtime::valueToString(peek(0));
+                                    time_t now = time(0); tm ltm; localtime_s(&ltm, &now);
+                                    char buf[256]; std::strftime(buf, sizeof(buf), fmt.c_str(), &ltm);
+                                    pop(); pop(); push(std::string(buf)); break;
                                 }
                                 pop(); pop(); push(0); break;
                             }
@@ -498,6 +633,36 @@ InterpretResult VM::run() {
                                     std::string res = val ? val : "";
                                     free(val);
                                     pop(); push(res);
+                                } else if (subName == "cpu") {
+                                    pop(); push((int)std::thread::hardware_concurrency()); break;
+                                } else if (subName == "pid") {
+#ifdef _WIN32
+                                    pop(); push(_getpid()); break;
+#else
+                                    pop(); push(static_cast<int>(getpid())); break;
+#endif
+                                } else if (subName == "user") {
+#ifdef _WIN32
+                                    char* val = nullptr; size_t len = 0;
+                                    _dupenv_s(&val, &len, "USERNAME");
+                                    std::string res = val ? val : ""; free(val);
+#else
+                                    char* val = getenv("USER"); std::string res = val ? val : "";
+#endif
+                                    pop(); push(res); break;
+                                } else if (subName == "cwd") {
+                                    pop(); push(std::filesystem::current_path().string()); break;
+                                } else if (subName == "temp") {
+                                    pop(); push(std::filesystem::temp_directory_path().string()); break;
+                                } else if (subName == "host") {
+#ifdef _WIN32
+                                    char* val = nullptr; size_t len = 0;
+                                    _dupenv_s(&val, &len, "COMPUTERNAME");
+                                    std::string res = val ? val : ""; free(val);
+#else
+                                    char* val = getenv("HOSTNAME"); std::string res = val ? val : "";
+#endif
+                                    pop(); push(res); break;
                                 } else { pop(); pop(); push(0); }
                                 break;
                             }
@@ -521,34 +686,211 @@ InterpretResult VM::run() {
                                     g_buttonCallbacks[id] = callback;
                                     CreateWindowExW(0, L"BUTTON", utf8ToWide(t).c_str(), WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, x, y, w, h, g_hWnd, (HMENU)(intptr_t)id, GetModuleHandle(NULL), NULL);
                                 } else if (subName == "loop") { MSG msg; while (GetMessageW(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); } }
+                                else if (subName == "label") {
+                                    int h = std::get<int>(pop()); int w = std::get<int>(pop());
+                                    int y = std::get<int>(pop()); int x = std::get<int>(pop());
+                                    std::string text = Runtime::valueToString(pop());
+                                    CreateWindowExW(0, L"STATIC", utf8ToWide(text).c_str(), WS_VISIBLE | WS_CHILD, x, y, w, h, g_hWnd, NULL, GetModuleHandle(NULL), NULL);
+                                } else if (subName == "close") {
+                                    DestroyWindow(g_hWnd); g_hWnd = NULL;
+                                } else if (subName == "setTitle") {
+                                    std::string t = Runtime::valueToString(pop());
+                                    SetWindowTextW(g_hWnd, utf8ToWide(t).c_str());
+                                } else if (subName == "getX") {
+                                    RECT rect; GetWindowRect(g_hWnd, &rect);
+                                    pop(); push(rect.left); break;
+                                } else if (subName == "getY") {
+                                    RECT rect; GetWindowRect(g_hWnd, &rect);
+                                    pop(); push(rect.top); break;
+                                } else if (subName == "show") {
+                                    ShowWindow(g_hWnd, SW_SHOW);
+                                }
                                 pop(); push(0);
                             } 
     #endif
                             else if (objName == "net") {
-                                std::string url = Runtime::valueToString(pop());
-                                if (subName == "get" || subName == "post") {
-                                    std::string data = (subName == "post") ? Runtime::valueToString(pop()) : "";
-                                    pop(); // pop net object
-
+                                if (subName == "status") {
+                                    pop(); push(g_netLastStatus);
+                                } else if (subName == "headers") {
+                                    pop(); push(g_netLastHeaders);
+                                } else if (subName == "ip") {
+                                    std::string ipResult;
                                     HINTERNET hSession = InternetOpenW(L"FluxAgent", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
                                     if (hSession) {
-                                        HINTERNET hConnect = InternetOpenUrlW(hSession, utf8ToWide(url).c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+                                        HINTERNET hConnect = InternetOpenUrlW(hSession, L"http://api.ipify.org", NULL, 0, INTERNET_FLAG_RELOAD, 0);
                                         if (hConnect) {
-                                            std::string response;
-                                            char buffer[4096];
-                                            DWORD bytesRead;
-                                            while (InternetReadFile(hConnect, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-                                                response.append(buffer, bytesRead);
-                                            }
+                                            char buffer[256]; DWORD bytesRead;
+                                            while (InternetReadFile(hConnect, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0)
+                                                ipResult.append(buffer, bytesRead);
                                             InternetCloseHandle(hConnect);
-                                            InternetCloseHandle(hSession);
-                                            push(response);
-                                            break;
                                         }
                                         InternetCloseHandle(hSession);
                                     }
-                                    push(std::string(""));
-                                } else { pop(); pop(); push(0); }
+                                    pop(); push(ipResult);
+                                } else if (subName == "encode") {
+                                    std::string str = Runtime::valueToString(pop());
+#ifdef _WIN32
+                                    std::wstring wstr = utf8ToWide(str);
+                                    wchar_t buf[4096]; DWORD buflen = 4096;
+                                    if (UrlEscapeW(wstr.c_str(), buf, &buflen, URL_ESCAPE_AS_UTF8) == S_OK) {
+                                        int size = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+                                        std::string result(size - 1, 0);
+                                        WideCharToMultiByte(CP_UTF8, 0, buf, -1, &result[0], size, NULL, NULL);
+                                        pop(); push(result);
+                                    } else {
+                                        pop(); push(str);
+                                    }
+#else
+                                    pop(); push(str); break;
+#endif
+                                } else if (subName == "decode") {
+                                    std::string str = Runtime::valueToString(pop());
+#ifdef _WIN32
+                                    std::wstring wstr = utf8ToWide(str);
+                                    wchar_t buf[4096];
+                                    wcscpy_s(buf, wstr.c_str());
+                                    DWORD buflen = 4096;
+                                    if (UrlUnescapeW(buf, NULL, &buflen, URL_UNESCAPE_INPLACE) == S_OK) {
+                                        int size = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+                                        std::string result(size - 1, 0);
+                                        WideCharToMultiByte(CP_UTF8, 0, buf, -1, &result[0], size, NULL, NULL);
+                                        pop(); push(result);
+                                    } else {
+                                        pop(); push(str);
+                                    }
+#else
+                                    pop(); push(str); break;
+#endif
+                                } else {
+                                    std::string url = Runtime::valueToString(pop());
+                                    if (subName == "get" || subName == "post") {
+                                        std::string data = (subName == "post") ? Runtime::valueToString(pop()) : "";
+                                        pop(); // pop net object
+
+                                        HINTERNET hSession = InternetOpenW(L"FluxAgent", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+                                        if (hSession) {
+                                            HINTERNET hRequest = InternetOpenUrlW(hSession, utf8ToWide(url).c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+                                            if (hRequest) {
+                                                DWORD statusCode = 0; DWORD statusSize = sizeof(statusCode);
+                                                HttpQueryInfoW(hRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
+                                                g_netLastStatus = (int)statusCode;
+                                                char headerBuf[4096]; DWORD headerSize = sizeof(headerBuf);
+                                                if (HttpQueryInfoW(hRequest, HTTP_QUERY_RAW_HEADERS_CRLF, headerBuf, &headerSize, NULL))
+                                                    g_netLastHeaders = std::string(headerBuf, headerSize);
+                                                std::string response;
+                                                char buffer[4096];
+                                                DWORD bytesRead;
+                                                while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0)
+                                                    response.append(buffer, bytesRead);
+                                                InternetCloseHandle(hRequest);
+                                                InternetCloseHandle(hSession);
+                                                push(response);
+                                                break;
+                                            }
+                                            InternetCloseHandle(hSession);
+                                        }
+                                        push(std::string(""));
+                                        break;
+                                    } else if (subName == "put") {
+                                        std::string data = Runtime::valueToString(pop());
+                                        pop(); // pop net object
+
+                                        HINTERNET hSession = InternetOpenW(L"FluxAgent", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+                                        if (hSession) {
+                                            HINTERNET hConnect = InternetConnectW(hSession, NULL, INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
+                                            if (hConnect) {
+                                                std::wstring wurl = utf8ToWide(url);
+                                                std::wstring wHost; std::wstring wPath;
+                                                size_t sl = wurl.find(L"://");
+                                                if (sl != std::wstring::npos) sl = wurl.find(L'/', sl + 3);
+                                                else sl = wurl.find(L'/');
+                                                if (sl != std::wstring::npos) { wHost = wurl.substr(0, sl); wPath = wurl.substr(sl); }
+                                                else { wHost = wurl; wPath = L"/"; }
+                                                HINTERNET hRequest = HttpOpenRequestW(hConnect, L"PUT", wPath.c_str(), NULL, NULL, NULL, 0, 0);
+                                                if (hRequest) {
+                                                    std::wstring wdata = utf8ToWide(data);
+                                                    if (HttpSendRequestW(hRequest, NULL, 0, (LPVOID)wdata.c_str(), (DWORD)wdata.size() * 2)) {
+                                                        DWORD statusCode = 0; DWORD statusSize = sizeof(statusCode);
+                                                        HttpQueryInfoW(hRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
+                                                        g_netLastStatus = (int)statusCode;
+                                                        char headerBuf[4096]; DWORD headerSize = sizeof(headerBuf);
+                                                        if (HttpQueryInfoW(hRequest, HTTP_QUERY_RAW_HEADERS_CRLF, headerBuf, &headerSize, NULL))
+                                                            g_netLastHeaders = std::string(headerBuf, headerSize);
+                                                        std::string response;
+                                                        char buffer[4096]; DWORD bytesRead;
+                                                        while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0)
+                                                            response.append(buffer, bytesRead);
+                                                        InternetCloseHandle(hRequest); InternetCloseHandle(hConnect); InternetCloseHandle(hSession);
+                                                        push(response); break;
+                                                    }
+                                                    InternetCloseHandle(hRequest);
+                                                }
+                                                InternetCloseHandle(hConnect);
+                                            }
+                                            InternetCloseHandle(hSession);
+                                        }
+                                        push(std::string(""));
+                                    } else if (subName == "del") {
+                                        pop(); // pop net object
+
+                                        HINTERNET hSession = InternetOpenW(L"FluxAgent", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+                                        if (hSession) {
+                                            HINTERNET hConnect = InternetConnectW(hSession, NULL, INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
+                                            if (hConnect) {
+                                                std::wstring wurl = utf8ToWide(url);
+                                                std::wstring wHost; std::wstring wPath;
+                                                size_t sl = wurl.find(L"://");
+                                                if (sl != std::wstring::npos) sl = wurl.find(L'/', sl + 3);
+                                                else sl = wurl.find(L'/');
+                                                if (sl != std::wstring::npos) { wHost = wurl.substr(0, sl); wPath = wurl.substr(sl); }
+                                                else { wHost = wurl; wPath = L"/"; }
+                                                HINTERNET hRequest = HttpOpenRequestW(hConnect, L"DELETE", wPath.c_str(), NULL, NULL, NULL, 0, 0);
+                                                if (hRequest) {
+                                                    if (HttpSendRequestW(hRequest, NULL, 0, NULL, 0)) {
+                                                        DWORD statusCode = 0; DWORD statusSize = sizeof(statusCode);
+                                                        HttpQueryInfoW(hRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
+                                                        g_netLastStatus = (int)statusCode;
+                                                        char headerBuf[4096]; DWORD headerSize = sizeof(headerBuf);
+                                                        if (HttpQueryInfoW(hRequest, HTTP_QUERY_RAW_HEADERS_CRLF, headerBuf, &headerSize, NULL))
+                                                            g_netLastHeaders = std::string(headerBuf, headerSize);
+                                                        std::string response;
+                                                        char buffer[4096]; DWORD bytesRead;
+                                                        while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0)
+                                                            response.append(buffer, bytesRead);
+                                                        InternetCloseHandle(hRequest); InternetCloseHandle(hConnect); InternetCloseHandle(hSession);
+                                                        push(response); break;
+                                                    }
+                                                    InternetCloseHandle(hRequest);
+                                                }
+                                                InternetCloseHandle(hConnect);
+                                            }
+                                            InternetCloseHandle(hSession);
+                                        }
+                                        push(std::string(""));
+                                    } else if (subName == "download") {
+                                        std::string filePath = Runtime::valueToString(pop());
+                                        pop(); // pop net object
+
+                                        HINTERNET hSession = InternetOpenW(L"FluxAgent", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+                                        if (hSession) {
+                                            HINTERNET hRequest = InternetOpenUrlW(hSession, utf8ToWide(url).c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+                                            if (hRequest) {
+                                                DWORD statusCode = 0; DWORD statusSize = sizeof(statusCode);
+                                                HttpQueryInfoW(hRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
+                                                g_netLastStatus = (int)statusCode;
+                                                std::ofstream outFile(filePath, std::ios::binary);
+                                                char buffer[4096]; DWORD bytesRead;
+                                                while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0)
+                                                    if (outFile) outFile.write(buffer, bytesRead);
+                                                InternetCloseHandle(hRequest);
+                                                InternetCloseHandle(hSession);
+                                                push(0); break;
+                                            }
+                                            InternetCloseHandle(hSession);
+                                        }
+                                        push(0);
+                                    } else { pop(); pop(); push(0); }
+                                }
                             }
                             else if (objName == "json") {
                                 if (subName == "parse") {
@@ -560,6 +902,107 @@ InterpretResult VM::run() {
                                     auto v = pop();
                                     pop(); // pop json
                                     push(stringifyJson(v));
+                                } else if (subName == "isValid") {
+                                    std::string s = Runtime::valueToString(pop());
+                                    size_t p = 0;
+                                    parseJsonValue(s, p);
+                                    while (p < s.size() && isspace(s[p])) p++;
+                                    pop(); // pop json
+                                    push(p >= s.size());
+                                } else if (subName == "format") {
+                                    std::string s = Runtime::valueToString(pop());
+                                    size_t p = 0;
+                                    auto parsed = parseJsonValue(s, p);
+                                    pop(); // pop json
+                                    push(stringifyJsonPretty(parsed));
+                                } else if (subName == "minify") {
+                                    std::string s = Runtime::valueToString(pop());
+                                    size_t p = 0;
+                                    auto parsed = parseJsonValue(s, p);
+                                    pop(); // pop json
+                                    push(stringifyJson(parsed));
+                                } else if (subName == "keys") {
+                                    auto v = pop();
+                                    pop(); // pop json
+                                    auto arr = std::make_shared<Runtime::Array>();
+                                    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(v)) {
+                                        auto map = std::get<std::shared_ptr<Runtime::Map>>(v);
+                                        for (auto& [k, _] : map->elements)
+                                            arr->elements.push_back(k);
+                                    }
+                                    push(arr);
+                                } else if (subName == "values") {
+                                    auto v = pop();
+                                    pop(); // pop json
+                                    auto arr = std::make_shared<Runtime::Array>();
+                                    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(v)) {
+                                        auto map = std::get<std::shared_ptr<Runtime::Map>>(v);
+                                        for (auto& [_, val] : map->elements)
+                                            arr->elements.push_back(val);
+                                    }
+                                    push(arr);
+                                } else if (subName == "has") {
+                                    std::string key = Runtime::valueToString(pop());
+                                    auto v = pop();
+                                    pop(); // pop json
+                                    bool found = false;
+                                    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(v)) {
+                                        auto map = std::get<std::shared_ptr<Runtime::Map>>(v);
+                                        found = map->elements.count(key) > 0;
+                                    }
+                                    push(found);
+                                } else if (subName == "merge") {
+                                    auto b = pop();
+                                    auto a = pop();
+                                    pop(); // pop json
+                                    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(a) &&
+                                        std::holds_alternative<std::shared_ptr<Runtime::Map>>(b)) {
+                                        auto mapA = std::get<std::shared_ptr<Runtime::Map>>(a);
+                                        auto mapB = std::get<std::shared_ptr<Runtime::Map>>(b);
+                                        auto result = std::make_shared<Runtime::Map>();
+                                        // deep copy from a
+                                        for (auto& [k, v] : mapA->elements) {
+                                            if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(v) &&
+                                                mapB->elements.count(k) &&
+                                                std::holds_alternative<std::shared_ptr<Runtime::Map>>(mapB->elements[k])) {
+                                                // recursive merge
+                                                auto merged = std::make_shared<Runtime::Map>();
+                                                auto innerA = std::get<std::shared_ptr<Runtime::Map>>(v);
+                                                auto innerB = std::get<std::shared_ptr<Runtime::Map>>(mapB->elements[k]);
+                                                for (auto& [ik, iv] : innerA->elements) merged->elements[ik] = iv;
+                                                for (auto& [ik, iv] : innerB->elements) merged->elements[ik] = iv;
+                                                result->elements[k] = merged;
+                                            } else {
+                                                result->elements[k] = v;
+                                            }
+                                        }
+                                        // copy from b (overwrites)
+                                        for (auto& [k, v] : mapB->elements) {
+                                            if (!mapA->elements.count(k) ||
+                                                !std::holds_alternative<std::shared_ptr<Runtime::Map>>(mapA->elements[k]) ||
+                                                !std::holds_alternative<std::shared_ptr<Runtime::Map>>(v)) {
+                                                result->elements[k] = v;
+                                            }
+                                        }
+                                        push(result);
+                                    } else if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(a)) {
+                                        push(a);
+                                    } else if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(b)) {
+                                        push(b);
+                                    } else {
+                                        push(std::make_shared<Runtime::Map>());
+                                    }
+                                } else if (subName == "type") {
+                                    auto v = pop();
+                                    pop(); // pop json
+                                    std::string typeStr;
+                                    if (std::holds_alternative<std::shared_ptr<Runtime::Map>>(v)) typeStr = "object";
+                                    else if (std::holds_alternative<std::shared_ptr<Runtime::Array>>(v)) typeStr = "array";
+                                    else if (std::holds_alternative<std::string>(v)) typeStr = "string";
+                                    else if (std::holds_alternative<int>(v) || std::holds_alternative<float>(v)) typeStr = "number";
+                                    else if (std::holds_alternative<bool>(v)) typeStr = "boolean";
+                                    else typeStr = "null";
+                                    push(typeStr);
                                 }
                                 break;
                             }
