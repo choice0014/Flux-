@@ -11,3 +11,9 @@ build/
 
 # Work tracking documents (local only)
 WORK_CONTINUATION.md
+
+# Flux installation
+modules/*.lib
+modules/*.exp
+flux.exe
+flux-pkg.exe

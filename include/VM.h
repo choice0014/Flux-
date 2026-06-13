@@ -52,6 +52,7 @@ private:
     void printStackTrace();
     void registerBuiltins();
     void loadModule(const std::string& name);
+    std::string getModulesPath() const;
 };
 
 } // namespace Flux

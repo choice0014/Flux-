@@ -26,14 +26,29 @@ void VM::registerBuiltins() {
     (*globals)["print"] = printFn;
 }
 
+std::string VM::getModulesPath() const {
+#ifdef _WIN32
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    std::string exePath(path);
+    size_t pos = exePath.find_last_of("\\\\/");
+    if (pos != std::string::npos) {
+        return exePath.substr(0, pos) + "\\\\modules";
+    }
+#endif
+    return "modules";
+}
+
 void VM::loadModule(const std::string& name) {
     if (loadedModules.count(name)) return;
 
 #ifdef _WIN32
-    std::string dllPath = "modules/" + name + ".dll";
+    std::string modulesDir = getModulesPath();
+    std::string dllPath = modulesDir + "\\\\" + name + ".dll";
+    
     HMODULE hModule = LoadLibraryA(dllPath.c_str());
     if (!hModule) {
-        throw std::runtime_error("Could not load module '" + name + "'.");
+        throw std::runtime_error("Could not load module '" + name + "'. Make sure '" + dllPath + "' exists.");
     }
 
     auto apiVersion = reinterpret_cast<int(*)()>(
