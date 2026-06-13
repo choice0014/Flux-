@@ -20,7 +20,6 @@ enum OpCode : uint8_t {
     OP_GREATER,
     OP_LESS,
 
-    OP_PRINT,
     OP_POP,           // 스택 상단 값 버리기
 
     OP_DEFINE_GLOBAL, // 전역 변수 정의
@@ -37,21 +36,7 @@ enum OpCode : uint8_t {
     OP_CALL,          // 함수 호출
     OP_RETURN,        // 함수 반환
 
-    OP_NEW,           // 객체 인스턴스 생성
-    OP_GET_PROPERTY,  // 객체 속성 읽기
-    OP_SET_PROPERTY,  // 객체 속성 설정
 
-    OP_NEW_MAP,       // Map 인스턴스 생성
-    OP_GET_MAP,       // Map 요소 읽기
-    OP_SET_MAP,       // Map 요소 설정
-
-    OP_DEFINE_STRUCT, // 구조체 정의 등록
-    OP_DEFINE_CLASS,  // 클래스 정의 등록
-
-    OP_TRY,           // 예외 핸들러 시작
-    OP_THROW,         // 예외 던지기
-    OP_END_TRY,       // 예외 핸들러 해제
-    OP_SPAWN,         // Spawn a new thread running a Flux function
 };
 
 } // namespace Flux

@@ -3,48 +3,22 @@
 
 #include <string>
 #include <variant>
-#include <vector>
 #include <memory>
-#include <map>
 
 namespace Flux {
 namespace Runtime {
 
-struct Array;
-struct Object;
-struct Map;
 struct ObjFunction;
-struct Method;
 class Chunk;
 
-using Value = std::variant<int, float, std::string, bool, std::shared_ptr<Array>, std::shared_ptr<Object>, std::shared_ptr<Map>, std::shared_ptr<ObjFunction>, std::shared_ptr<Method>, void*>;
-
-struct Method {
-    enum MethodType { ARRAY, MAP, STRING };
-    MethodType type;
-    std::string name;
-    Value target;
-};
+using Value = std::variant<int, float, std::string, bool,
+    std::shared_ptr<ObjFunction>>;
 
 struct ObjFunction {
     std::string name;
     int arity;
     std::shared_ptr<Chunk> chunk;
     ObjFunction() : arity(0), chunk(std::make_shared<Chunk>()) {}
-};
-
-struct Array {
-    std::string elementType;
-    std::vector<Value> elements;
-};
-
-struct Object {
-    std::string typeName;
-    std::map<std::string, Value> members;
-};
-
-struct Map {
-    std::map<std::string, Value> elements;
 };
 
 inline std::string valueToString(const Value& val) {
@@ -57,23 +31,6 @@ inline std::string valueToString(const Value& val) {
     }
     if (std::holds_alternative<std::string>(val)) return std::get<std::string>(val);
     if (std::holds_alternative<bool>(val)) return std::get<bool>(val) ? "true" : "false";
-    if (std::holds_alternative<std::shared_ptr<Array>>(val)) {
-        auto arr = std::get<std::shared_ptr<Array>>(val);
-        std::string res = "[";
-        for (size_t i = 0; i < arr->elements.size(); ++i) {
-            res += valueToString(arr->elements[i]);
-            if (i + 1 < arr->elements.size()) res += ", ";
-        }
-        res += "]";
-        return res;
-    }
-    if (std::holds_alternative<std::shared_ptr<Object>>(val)) {
-        return "[object " + std::get<std::shared_ptr<Object>>(val)->typeName + "]";
-    }
-    if (std::holds_alternative<std::shared_ptr<Map>>(val)) {
-        return "[map]";
-    }
-    if (std::holds_alternative<std::shared_ptr<Method>>(val)) return "[built-in method]";
     return "";
 }
 

@@ -1,10 +1,6 @@
-#include "Compiler.h"
+﻿#include "Compiler.h"
 #include "OpCode.h"
-#include "Lexer.h"
-#include "Parser.h"
 #include <stdexcept>
-#include <fstream>
-#include <sstream>
 
 namespace Flux {
 
@@ -87,17 +83,10 @@ void Compiler::compileStatement(AST::Statement& stmt) {
             else if (varDecl->type == "float") emitConstant(0.0f);
             else if (varDecl->type == "bool") emitByte(OP_FALSE);
             else if (varDecl->type == "string") emitConstant(std::string(""));
-            else {
-                int nameIdx = currentChunk->addConstant(varDecl->type);
-                emitByte(OP_NEW);
-                emitByte((uint8_t)nameIdx);
-            }
 
             if (scopeDepth > 0) {
-                // Local variable
                 locals.push_back({decl->name, scopeDepth});
             } else {
-                // Global variable
                 int index = currentChunk->addConstant(decl->name);
                 emitByte(OP_DEFINE_GLOBAL);
                 emitByte((uint8_t)index);
@@ -113,7 +102,6 @@ void Compiler::compileStatement(AST::Statement& stmt) {
         subCompiler.currentChunk = fnObj->chunk.get();
         subCompiler.scopeDepth = 1;
 
-        // Slot 0 is reserved for function itself or 'this'
         subCompiler.locals.push_back({func->name, 0}); 
         for (auto& p : func->params) {
             subCompiler.locals.push_back({p.name, 1});
@@ -123,7 +111,6 @@ void Compiler::compileStatement(AST::Statement& stmt) {
         subCompiler.emitByte(OP_NULL);
         subCompiler.emitByte(OP_RETURN);
 
-        // Define function in global scope
         int index = currentChunk->addConstant(fnObj);
         emitByte(OP_CONSTANT);
         emitByte((uint8_t)index);
@@ -159,94 +146,6 @@ void Compiler::compileStatement(AST::Statement& stmt) {
         beginScope();
         for (auto& s : block->statements) compileStatement(*s);
         endScope();
-    } else if (auto* importStmt = dynamic_cast<AST::ImportStmt*>(&stmt)) {
-        std::string moduleName = importStmt->moduleName;
-        if (moduleName == "math" || moduleName == "gui" || moduleName == "system") return;
-        
-        std::string fileName = moduleName + ".fx";
-        if (loadedFiles.count(fileName)) return;
-        loadedFiles.insert(fileName);
-
-        std::ifstream file(fileName);
-        if (!file.is_open()) throw std::runtime_error("Could not open module file: " + fileName);
-        std::stringstream buffer; buffer << file.rdbuf();
-        std::string code = buffer.str();
-
-        Lexer lexer(code);
-        auto tokens = lexer.tokenize();
-        Parser parser(tokens);
-        auto program = parser.parse();
-
-        for (auto& s : program->statements) compileStatement(*s);
-
-    } else if (auto* importFrom = dynamic_cast<AST::ImportFromStmt*>(&stmt)) {
-        std::string fileName = importFrom->fileName;
-        if (loadedFiles.count(fileName)) return;
-        loadedFiles.insert(fileName);
-
-        std::ifstream file(fileName);
-        if (!file.is_open()) throw std::runtime_error("Could not open module file: " + fileName);
-        std::stringstream buffer; buffer << file.rdbuf();
-        std::string code = buffer.str();
-
-        Lexer lexer(code);
-        auto tokens = lexer.tokenize();
-        Parser parser(tokens);
-        auto program = parser.parse();
-
-        for (auto& s : program->statements) compileStatement(*s);
-
-    } else if (auto* throwStmt = dynamic_cast<AST::ThrowStmt*>(&stmt)) {
-        compileExpression(*throwStmt->value);
-        emitByte(OP_THROW);
-    } else if (auto* tryCatch = dynamic_cast<AST::TryCatchStmt*>(&stmt)) {
-        int tryJump = emitJump(OP_TRY);
-        compileStatement(*tryCatch->tryBlock);
-        emitByte(OP_END_TRY);
-        int skipCatch = emitJump(OP_JUMP);
-
-        patchJump(tryJump);
-        
-        beginScope();
-        locals.push_back({tryCatch->exceptionVarName, scopeDepth});
-        compileStatement(*tryCatch->catchBlock);
-        endScope();
-
-        patchJump(skipCatch);
-    } else if (auto* sd = dynamic_cast<AST::StructDef*>(&stmt)) {
-        int nameIdx = currentChunk->addConstant(sd->name);
-        int ptrIdx = currentChunk->addConstant((void*)sd);
-        emitByte(OP_DEFINE_STRUCT);
-        emitByte((uint8_t)nameIdx);
-        emitByte((uint8_t)ptrIdx);
-    } else if (auto* cd = dynamic_cast<AST::ClassDef*>(&stmt)) {
-        int nameIdx = currentChunk->addConstant(cd->name);
-        int ptrIdx = currentChunk->addConstant((void*)cd);
-        emitByte(OP_DEFINE_CLASS);
-        emitByte((uint8_t)nameIdx);
-        emitByte((uint8_t)ptrIdx);
-
-        // Compile methods
-        for (auto& m : cd->methods) {
-            auto fnObj = std::make_shared<Runtime::ObjFunction>();
-            fnObj->name = cd->name + "." + m->name;
-            fnObj->arity = (int)m->params.size();
-
-            Compiler sub;
-            sub.currentChunk = fnObj->chunk.get();
-            sub.scopeDepth = 1;
-            sub.locals.push_back({"this", 0}); // Slot 0 is this
-            for (auto& p : m->params) sub.locals.push_back({p.name, 1});
-            for (auto& s : m->body) sub.compileStatement(*s);
-            sub.emitByte(OP_NULL);
-            sub.emitByte(OP_RETURN);
-            
-            // Register method in global (simplified for now)
-            int fnIdx = currentChunk->addConstant(fnObj);
-            emitByte(OP_CONSTANT); emitByte((uint8_t)fnIdx);
-            int mNameIdx = currentChunk->addConstant(cd->name + "." + m->name);
-            emitByte(OP_DEFINE_GLOBAL); emitByte((uint8_t)mNameIdx);
-        }
     }
 }
 
@@ -259,24 +158,6 @@ void Compiler::compileExpression(AST::Expression& expr) {
         emitConstant(sl->value);
     } else if (auto* bl = dynamic_cast<AST::BooleanLiteral*>(&expr)) {
         emitByte(bl->value ? OP_TRUE : OP_FALSE);
-    } else if (dynamic_cast<AST::ThisExpr*>(&expr)) {
-        emitByte(OP_GET_LOCAL);
-        emitByte(0);
-    } else if (auto* newExpr = dynamic_cast<AST::NewExpr*>(&expr)) {
-        int index = currentChunk->addConstant(newExpr->className);
-        emitByte(OP_NEW);
-        emitByte((uint8_t)index);
-    } else if (auto* memAcc = dynamic_cast<AST::MemberAccessExpr*>(&expr)) {
-        compileExpression(*memAcc->object);
-        int index = currentChunk->addConstant(memAcc->memberName);
-        emitByte(OP_GET_PROPERTY);
-        emitByte((uint8_t)index);
-    } else if (auto* memAss = dynamic_cast<AST::MemberAssignment*>(&expr)) {
-        compileExpression(*memAss->memberAccess->object);
-        compileExpression(*memAss->value);
-        int index = currentChunk->addConstant(memAss->memberAccess->memberName);
-        emitByte(OP_SET_PROPERTY);
-        emitByte((uint8_t)index);
     } else if (auto* unary = dynamic_cast<AST::UnaryExpr*>(&expr)) {
         if (unary->op.type == TokenType::T_MINUS) {
             emitConstant(0);
@@ -320,57 +201,19 @@ void Compiler::compileExpression(AST::Expression& expr) {
             case TokenType::T_LESS: emitByte(OP_LESS); break;
             default: break;
         }
-    } else if (auto* mc = dynamic_cast<AST::MethodCallExpr*>(&expr)) {
-        // 1. Compile the target object (array/map/string)
-        compileExpression(*mc->object);
-        // 2. Emit OP_GET_PROPERTY with the method name
-        int nameIdx = currentChunk->addConstant(mc->methodName);
-        emitByte(OP_GET_PROPERTY);
-        emitByte((uint8_t)nameIdx);
-        // 3. Compile arguments
-        for (auto& arg : mc->args) compileExpression(*arg);
-        // 4. Emit OP_CALL
-        emitByte(OP_CALL);
-        emitByte((uint8_t)mc->args.size());
     } else if (auto* call = dynamic_cast<AST::CallExpr*>(&expr)) {
         if (call->callee == "print") {
-            compileExpression(*call->args[0]);
-            emitByte(OP_PRINT);
-            emitByte(OP_NULL); 
-        } else if (call->callee == "spawn") {
-            if (call->args.empty())
-                throw std::runtime_error("spawn requires at least a function argument.");
-            compileExpression(*call->args[0]); // the function
-            for (size_t i = 1; i < call->args.size(); ++i)
-                compileExpression(*call->args[i]); // the args for the function
-            emitByte(OP_SPAWN);
-            emitByte((uint8_t)(call->args.size() - 1));
+            int idx = currentChunk->addConstant(std::string("print"));
+            emitByte(OP_CONSTANT);
+            emitByte((uint8_t)idx);
         } else {
-            // Function call
-            int index = currentChunk->addConstant(call->callee);
+            int idx = currentChunk->addConstant(call->callee);
             emitByte(OP_GET_GLOBAL);
-            emitByte((uint8_t)index);
-            for (auto& arg : call->args) compileExpression(*arg);
-            emitByte(OP_CALL);
-            emitByte((uint8_t)call->args.size());
+            emitByte((uint8_t)idx);
         }
-    } else if (auto* printfExpr = dynamic_cast<AST::PrintfExpr*>(&expr)) {
-        // Handle printf interpolation: "text {expr} text"
-        bool first = true;
-        for (const auto& p : printfExpr->parts) {
-            if (p.isExpression) {
-                compileExpression(*p.expr);
-            } else {
-                emitConstant(p.text);
-            }
-            if (!first) {
-                emitByte(OP_ADD);
-            }
-            first = false;
-        }
-        if (first) emitConstant(std::string("")); // Empty printf
-        emitByte(OP_PRINT);
-        emitByte(OP_NULL);
+        for (auto& arg : call->args) compileExpression(*arg);
+        emitByte(OP_CALL);
+        emitByte((uint8_t)call->args.size());
     }
 }
 

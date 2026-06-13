@@ -5,15 +5,8 @@
 #include <vector>
 #include <map>
 #include <string>
-#include <mutex>
-#include <thread>
 
 namespace Flux {
-
-namespace AST {
-    class StructDef;
-    class ClassDef;
-}
 
 enum class InterpretResult {
     INTERPRET_OK,
@@ -25,12 +18,6 @@ struct CallFrame {
     Runtime::Chunk* chunk;
     uint8_t* ip;
     Runtime::Value* slots; 
-};
-
-struct ExceptionHandler {
-    uint8_t* handlerIP;
-    int stackDepth;
-    int frameIndex;
 };
 
 class VM {
@@ -55,11 +42,6 @@ private:
     Runtime::Value* stackTop;
 
     std::shared_ptr<std::map<std::string, Runtime::Value>> globals;
-    std::map<std::string, AST::StructDef*> structs;
-    std::map<std::string, AST::ClassDef*> classes;
-    std::vector<ExceptionHandler> handlerStack;
-
-    std::shared_ptr<std::mutex> globalsMutex;
 
     uint8_t readByte() { return *frames[frameCount - 1].ip++; }
     Runtime::Value readConstant() { return frames[frameCount - 1].chunk->constants[readByte()]; }

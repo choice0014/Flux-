@@ -29,19 +29,9 @@ private:
     std::vector<std::unique_ptr<AST::Statement>> parseBlock();
     std::unique_ptr<AST::Statement> parseIfStmt();
     std::unique_ptr<AST::Statement> parseWhileStmt();
-    std::unique_ptr<AST::Statement> parseForStmt();
     std::unique_ptr<AST::Statement> parseReturnStmt();
-    std::unique_ptr<AST::Statement> parseBreakStmt();
-    std::unique_ptr<AST::Statement> parseSwitchStmt();
     std::unique_ptr<AST::Statement> parseFunctionDef();
     std::unique_ptr<AST::Statement> parseVarDeclaration();
-    std::unique_ptr<AST::Statement> parseImportStmt();
-    
-    // 신규 파싱 메서드
-    std::unique_ptr<AST::Statement> parseStructDef();
-    std::unique_ptr<AST::Statement> parseClassDef();
-    std::unique_ptr<AST::Statement> parseTryCatchStmt();
-    std::unique_ptr<AST::Statement> parseThrowStmt();
 
     std::unique_ptr<AST::Expression> parseExpression();
     std::unique_ptr<AST::Expression> parseAssignment();
@@ -53,7 +43,6 @@ private:
     std::unique_ptr<AST::Expression> parseUnary();
     std::unique_ptr<AST::Expression> parsePrimary();
     std::unique_ptr<AST::Expression> parsePostfix();
-    std::unique_ptr<AST::Expression> parsePrintfInterpolation(const std::string& str);
 };
 
 } // namespace Flux

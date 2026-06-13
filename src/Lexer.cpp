@@ -1,4 +1,4 @@
-#include "Lexer.h"
+﻿#include "Lexer.h"
 #include <cctype>
 
 namespace Flux {
@@ -10,28 +10,15 @@ const std::map<std::string, TokenType> Lexer::keywords = {
     {"float", TokenType::T_FLOAT},
     {"string", TokenType::T_STRING},
     {"bool", TokenType::T_BOOL},
-    {"import", TokenType::T_IMPORT},
     {"if", TokenType::T_IF},
     {"else", TokenType::T_ELSE},
-    {"for", TokenType::T_FOR},
     {"while", TokenType::T_WHILE},
     {"return", TokenType::T_RETURN},
     {"true", TokenType::T_TRUE},
     {"false", TokenType::T_FALSE},
-    {"switch", TokenType::T_SWITCH},
-    {"case", TokenType::T_CASE},
-    {"default", TokenType::T_DEFAULT},
-    {"break", TokenType::T_BREAK},
     {"and", TokenType::T_AND_AND},
     {"or", TokenType::T_OR_OR},
-    {"not", TokenType::T_BANG},
-    {"struct", TokenType::T_STRUCT},
-    {"class", TokenType::T_CLASS},
-    {"try", TokenType::T_TRY},
-    {"catch", TokenType::T_CATCH},
-    {"throw", TokenType::T_THROW},
-    {"new", TokenType::T_NEW},
-    {"this", TokenType::T_THIS}
+    {"not", TokenType::T_BANG}
 };
 
 Lexer::Lexer(const std::string& source) : source(source), pos(0), line(1), column(1) {}
@@ -87,7 +74,7 @@ Token Lexer::readString() {
     std::string val;
     while (!isAtEnd() && peek() != '"') {
         if (peek() == '\\') {
-            advance(); // skip \
+            advance(); // skip backslash
             if (isAtEnd()) break;
             char escape = advance();
             switch (escape) {
@@ -122,11 +109,8 @@ std::vector<Token> Lexer::tokenize() {
                 case ')': tokens.push_back(Token(TokenType::T_RPAREN, ")", line, sc)); break;
                 case '{': tokens.push_back(Token(TokenType::T_LBRACE, "{", line, sc)); break;
                 case '}': tokens.push_back(Token(TokenType::T_RBRACE, "}", line, sc)); break;
-                case '[': tokens.push_back(Token(TokenType::T_LBRACKET, "[", line, sc)); break;
-                case ']': tokens.push_back(Token(TokenType::T_RBRACKET, "]", line, sc)); break;
                 case ',': tokens.push_back(Token(TokenType::T_COMMA, ",", line, sc)); break;
                 case ';': tokens.push_back(Token(TokenType::T_SEMICOLON, ";", line, sc)); break;
-                case '.': tokens.push_back(Token(TokenType::T_DOT, ".", line, sc)); break;
                 case '=': 
                     if (peek() == '=') { advance(); tokens.push_back(Token(TokenType::T_EQUAL_EQUAL, "==", line, sc)); }
                     else tokens.push_back(Token(TokenType::T_EQUALS, "=", line, sc)); 
@@ -152,13 +136,11 @@ std::vector<Token> Lexer::tokenize() {
                     else tokens.push_back(Token(TokenType::T_INVALID, "|", line, sc));
                     break;
                 case '+': 
-                    if (peek() == '+') { advance(); tokens.push_back(Token(TokenType::T_PLUS_PLUS, "++", line, sc)); }
-                    else if (peek() == '=') { advance(); tokens.push_back(Token(TokenType::T_PLUS_EQUAL, "+=", line, sc)); }
+                    if (peek() == '=') { advance(); tokens.push_back(Token(TokenType::T_PLUS_EQUAL, "+=", line, sc)); }
                     else tokens.push_back(Token(TokenType::T_PLUS, "+", line, sc)); 
                     break;
                 case '-': 
-                    if (peek() == '-') { advance(); tokens.push_back(Token(TokenType::T_MINUS_MINUS, "--", line, sc)); }
-                    else if (peek() == '=') { advance(); tokens.push_back(Token(TokenType::T_MINUS_EQUAL, "-=", line, sc)); }
+                    if (peek() == '=') { advance(); tokens.push_back(Token(TokenType::T_MINUS_EQUAL, "-=", line, sc)); }
                     else tokens.push_back(Token(TokenType::T_MINUS, "-", line, sc)); 
                     break;
                 case '*':
